@@ -1,0 +1,83 @@
+describe("core/slash_command.lua", function()
+    local Ledger
+
+    before_each(function()
+        Ledger = {}
+        local chunk = assert(loadfile("Ledger/core/slash_command.lua"))
+        chunk("Ledger", Ledger)
+    end)
+
+    describe("comando vacio", function()
+        it("devuelve subcomando vacio y sin argumentos con cadena vacia", function()
+            local command, args = Ledger.ParseCommand("")
+            assert.are.equal("", command)
+            assert.are.same({}, args)
+        end)
+
+        it("trata nil igual que la cadena vacia", function()
+            local command, args = Ledger.ParseCommand(nil)
+            assert.are.equal("", command)
+            assert.are.same({}, args)
+        end)
+
+        it("el comando vacio es un subcomando conocido", function()
+            assert.is_true(Ledger.IsKnownCommand(""))
+        end)
+    end)
+
+    describe("subcomando suelto", function()
+        it("reconoce un subcomando sin argumentos", function()
+            local command, args = Ledger.ParseCommand("reset")
+            assert.are.equal("reset", command)
+            assert.are.same({}, args)
+            assert.is_true(Ledger.IsKnownCommand(command))
+        end)
+    end)
+
+    describe("subcomando con argumento", function()
+        it("separa el subcomando de su argumento", function()
+            local command, args = Ledger.ParseCommand("log info")
+            assert.are.equal("log", command)
+            assert.are.same({ "info" }, args)
+        end)
+    end)
+
+    describe("argumento desconocido", function()
+        it("lo parsea igual, sin validarlo: la validacion es de quien despacha", function()
+            local command, args = Ledger.ParseCommand("log foo")
+            assert.are.equal("log", command)
+            assert.are.same({ "foo" }, args)
+        end)
+
+        it("un subcomando de primer nivel desconocido no aparece como conocido", function()
+            local command = Ledger.ParseCommand("bogus")
+            assert.are.equal("bogus", command)
+            assert.is_false(Ledger.IsKnownCommand(command))
+        end)
+    end)
+
+    describe("espacios extra", function()
+        it("ignora espacios de mas al principio, en medio y al final", function()
+            local command, args = Ledger.ParseCommand("   log    info   ")
+            assert.are.equal("log", command)
+            assert.are.same({ "info" }, args)
+        end)
+    end)
+
+    describe("mayusculas", function()
+        it("normaliza subcomando y argumentos a minusculas", function()
+            local command, args = Ledger.ParseCommand("LOG Info")
+            assert.are.equal("log", command)
+            assert.are.same({ "info" }, args)
+        end)
+    end)
+
+    describe("HelpText", function()
+        it("incluye una linea por cada subcomando declarado", function()
+            local text = Ledger.HelpText()
+            for _, cmd in ipairs(Ledger.SLASH_COMMANDS) do
+                assert.is_not_nil(text:find(cmd.desc, 1, true))
+            end
+        end)
+    end)
+end)

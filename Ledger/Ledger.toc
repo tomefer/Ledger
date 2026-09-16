@@ -1,0 +1,30 @@
+## Interface: 11509
+## Title: Ledger
+## Notes: Seguimiento de experiencia. Esqueleto mínimo.
+## Author: tomef
+## Version: 0.1.0
+## SavedVariables: LedgerDB
+## SavedVariablesPerCharacter: LedgerCharDB
+
+core/xp.lua
+core/series.lua
+core/events.lua
+core/time_buckets.lua
+core/level_close.lua
+core/chat_patterns.lua
+core/xp_gain_matcher.lua
+core/xp_delta.lua
+core/xp_reconciler.lua
+core/log.lua
+core/slash_command.lua
+core/state_dump.lua
+core/xp_bar.lua
+core/time_bar.lua
+
+ui/frame.lua
+ui/debug_frame.lua
+ui/palette.lua
+ui/xp_bar.lua
+ui/time_bar.lua
+ui/events.lua
+ui/xp_capture.lua
