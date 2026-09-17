@@ -17,41 +17,50 @@ local RESTED_LIGHTEN_AMOUNT = 0.35
 -- Frame and anchoring to the native xp bar.
 ----------------------------------------------------------------------
 
--- Confirmed with /fstack in-game: this client does NOT use the classic
--- "MainMenuExpBar" frame (that was the initial assumption, ruled out).
--- It uses the tracking-bar system shared with retail
--- (Interface/AddOns/Blizzard_ActionBar/Classic/StatusTrackingBarTemplate.xml):
--- the xp bar lives inside the global container
--- "MainStatusTrackingBarContainer", as an ANONYMOUS child (no stable
+-- Confirmed with /fstack in-game (Classic Era, 1.15.x): this client
+-- does NOT use the classic "MainMenuExpBar" frame (that was the
+-- initial assumption, ruled out) -- it uses the tracking-bar system
+-- shared with retail
+-- (Interface/AddOns/Blizzard_ActionBar/Classic/StatusTrackingBarTemplate.xml),
+-- with the xp bar living inside the global container
+-- "MainStatusTrackingBarContainer" as an ANONYMOUS child (no stable
 -- global name -- what /fstack shows as
 -- "MainStatusTrackingBarContainer.<hash>" is just how that tool
--- represents an unnamed frame, not a real variable). That container can
--- have more than one child at once (reputation, honor...) confirmed
--- in-game: with reputation tracking also active, two children with a
--- StatusBar show up. The right one is located by comparing each
--- StatusBar's max against UnitXPMax("player") -- confirmed in-game
--- that the xp child is the only one whose max matches (the reputation
--- one had a max normalized to 1, not the real range).
-local function FindNativeXPBar()
-    if not MainStatusTrackingBarContainer then
-        Ledger.Log("trace", "FindNativeXPBar: MainStatusTrackingBarContainer does not exist")
+-- represents an unnamed frame, never a real variable to reference by
+-- name). WoW Forever (build 1.60.1, interface 16001, see CLAUDE.md)
+-- also has that same container, but unlike Classic Era its children
+-- anchor TOPLEFT/BOTTOMRIGHT with no offset, so the container's own
+-- bounds already ARE the bar's -- no child search needed there.
+-- ANCHOR_CANDIDATES is tried in order, first one that exists wins;
+-- MainMenuExpBar is kept only as a defensive fallback for a client
+-- that has neither container shape (never actually reached on either
+-- client confirmed so far).
+local ANCHOR_CANDIDATES = { "MainStatusTrackingBarContainer", "MainMenuExpBar" }
+
+-- Inside MainStatusTrackingBarContainer, finds the specific child
+-- whose StatusBar's max matches UnitXPMax("player"). That container
+-- can have more than one child at once (reputation, honor...)
+-- confirmed in-game on Classic Era: with reputation tracking also
+-- active, two children with a StatusBar show up, and comparing by
+-- UnitXPMax is what tells them apart (the reputation one had a max
+-- normalized to 1, not the real range). Returns nil if nothing
+-- matches -- e.g. WoW Forever, whose container doesn't have this
+-- child shape at all, or max level (no xp bar to match against).
+local function FindMatchingChild(container)
+    local xpMax = UnitXPMax("player")
+    if not xpMax or xpMax <= 0 then
+        Ledger.Log("trace", string.format("FindMatchingChild: UnitXPMax=%s, max level or no data yet", tostring(xpMax)))
         return nil
     end
 
-    local xpMax = UnitXPMax("player")
-    if not xpMax or xpMax <= 0 then
-        Ledger.Log("trace", string.format("FindNativeXPBar: UnitXPMax=%s, max level or no data yet", tostring(xpMax)))
-        return nil -- max level: no xp bar to anchor to
-    end
-
-    local children = { MainStatusTrackingBarContainer:GetChildren() }
-    Ledger.Log("trace", string.format("FindNativeXPBar: xpMax=%d, %d children in the container", xpMax, #children))
+    local children = { container:GetChildren() }
+    Ledger.Log("trace", string.format("FindMatchingChild: xpMax=%d, %d children in the container", xpMax, #children))
 
     for _, child in ipairs(children) do
         local statusBar = child.StatusBar
         if statusBar then
             local _, max = statusBar:GetMinMaxValues()
-            Ledger.Log("trace", string.format("FindNativeXPBar: candidate with max=%s", tostring(max)))
+            Ledger.Log("trace", string.format("FindMatchingChild: candidate with max=%s", tostring(max)))
             -- Tolerance instead of exact equality: in case the max
             -- comes in as a float with some internal Blizzard rounding.
             if max and math.abs(max - xpMax) < 0.5 then
@@ -62,8 +71,62 @@ local function FindNativeXPBar()
     return nil
 end
 
+-- Resolves what to anchor to. Returns (frame, sourceDescription), or
+-- (nil, nil) if none of ANCHOR_CANDIDATES exists at all. Never
+-- references a runtime-generated child name directly -- the matching
+-- child (if any) is always found by live enumeration
+-- (GetChildren/FindMatchingChild), never by a hardcoded name string.
+local function FindNativeXPBar()
+    for _, name in ipairs(ANCHOR_CANDIDATES) do
+        local candidate = _G[name]
+        if candidate then
+            if name == "MainStatusTrackingBarContainer" then
+                local child = FindMatchingChild(candidate)
+                if child then
+                    return child, name .. " (matched child)"
+                end
+                -- No matching child: this client's container already
+                -- has the bar's own geometry (WoW Forever), so it
+                -- serves directly instead of failing.
+                return candidate, name .. " (container)"
+            end
+            return candidate, name
+        end
+    end
+    return nil, nil
+end
+
+-- Whether the frame is currently in the degraded (no native anchor
+-- found) fallback -- set by AnchorToNativeBar/DegradedAnchor below,
+-- read by OnDragStart/OnDragStop so dragging only actually moves the
+-- frame in that mode. Mouse stays enabled unconditionally (below):
+-- the tooltip at the end of this file needs it regardless of anchor
+-- mode, so gating on EnableMouse instead of this flag would silently
+-- break the tooltip whenever natively anchored -- the common case.
+local inDegradedMode = false
+
 local frame = CreateFrame("Frame", "LedgerXPBar", UIParent)
 frame:Hide()
+frame:SetClampedToScreen(true)
+frame:SetMovable(true)
+frame:RegisterForDrag("LeftButton")
+frame:SetScript("OnDragStart", function(self)
+    if inDegradedMode then
+        self:StartMoving()
+    end
+end)
+frame:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    if inDegradedMode and LedgerDB then
+        local point, _, relativePoint, x, y = self:GetPoint()
+        LedgerDB.barDefaultPos = {
+            point         = point or "CENTER",
+            relativePoint = relativePoint or "CENTER",
+            x             = x or 0,
+            y             = y or 0,
+        }
+    end
+end)
 Ledger.xpBarFrame = frame
 
 ----------------------------------------------------------------------
@@ -171,29 +234,55 @@ local function PaintSegment(pair, segment)
     end
 end
 
--- Anchors the frame to the native xp bar: same width and same
--- horizontal position, right above it. Returns the available width in
--- pixels, or nil if it can't be found (max level, or the container
--- doesn't exist in this client; logged as ERROR only once, not on
--- every attempt).
-local warnedMissingNativeBar = false
-local function AnchorToNativeBar()
-    local nativeBar = FindNativeXPBar()
-    if not nativeBar then
-        if not warnedMissingNativeBar and UnitXPMax("player") > 0 then
-            Ledger.Log("error",
-                "Could not find the native xp bar inside MainStatusTrackingBarContainer (comparing by UnitXPMax). This client might not have that container -- check ui/xp_bar.lua: FindNativeXPBar.")
-            warnedMissingNativeBar = true
-        end
-        return nil
+-- Fallback when neither ANCHOR_CANDIDATES exists: instead of failing
+-- to draw at all, place the frame at a movable default position
+-- (LedgerDB.barDefaultPos, saved on drag -- see the frame's
+-- OnDragStop above) with a fixed default width. Logged once per
+-- session at INFO (never ERROR: this is a supported, working mode,
+-- not a broken one).
+local warnedDegraded = false
+local function DegradedAnchor()
+    if not warnedDegraded then
+        Ledger.Log("info",
+            "No native xp bar found to anchor to (neither MainStatusTrackingBarContainer nor MainMenuExpBar exist) -- showing the composition bar at a movable default position instead. Drag it where you want.")
+        warnedDegraded = true
     end
 
-    local width = nativeBar:GetWidth()
-    frame:SetSize(width, LedgerDB.barHeight or Ledger.DEFAULTS.barHeight)
+    inDegradedMode = true
+
+    local pos = (LedgerDB and LedgerDB.barDefaultPos) or Ledger.DEFAULTS.barDefaultPos
     frame:ClearAllPoints()
-    frame:SetPoint("BOTTOMLEFT", nativeBar, "TOPLEFT", 0, 1)
-    frame:SetPoint("BOTTOMRIGHT", nativeBar, "TOPRIGHT", 0, 1)
+    frame:SetPoint(pos.point, UIParent, pos.relativePoint, pos.x, pos.y)
+    frame:SetSize(Ledger.DEFAULTS.barDefaultWidth, (LedgerDB and LedgerDB.barHeight) or Ledger.DEFAULTS.barHeight)
     LayoutBorder()
+
+    return frame:GetWidth()
+end
+
+-- Anchors the frame to the resolved native xp bar (FindNativeXPBar):
+-- same width and same horizontal position, right above it. Falls back
+-- to DegradedAnchor if nothing resolves. Always returns a usable
+-- width -- never nil, there's always some anchor now, native or
+-- degraded. Also records Ledger.xpBarAnchorInfo (source, width,
+-- height) for /ldg probe to report.
+local function AnchorToNativeBar()
+    local nativeBar, source = FindNativeXPBar()
+
+    local width
+    if not nativeBar then
+        width = DegradedAnchor()
+        source = "degraded (no anchor found)"
+    else
+        inDegradedMode = false
+        width = nativeBar:GetWidth()
+        frame:SetSize(width, LedgerDB.barHeight or Ledger.DEFAULTS.barHeight)
+        frame:ClearAllPoints()
+        frame:SetPoint("BOTTOMLEFT", nativeBar, "TOPLEFT", 0, 1)
+        frame:SetPoint("BOTTOMRIGHT", nativeBar, "TOPRIGHT", 0, 1)
+        LayoutBorder()
+    end
+
+    Ledger.xpBarAnchorInfo = { source = source, width = width, height = frame:GetHeight() }
     return width
 end
 

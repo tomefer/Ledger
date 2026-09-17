@@ -681,27 +681,75 @@ horizontal que la barra nativa (`ui/xp_bar.lua: AnchorToNativeBar`).
   SavedVariable a mano).
 - `/ldg bar` alterna `LedgerDB.barShown` y muestra/oculta el frame.
 
-**Localización de la barra nativa, confirmada en el juego con
-`/fstack`**: la suposición inicial (`MainMenuExpBar`, la barra clásica
-de Vanilla) era incorrecta — este cliente usa el sistema de barras de
-seguimiento compartido con retail
-(`Interface/AddOns/Blizzard_ActionBar/Classic/StatusTrackingBarTemplate.xml`).
-La barra de xp vive dentro del contenedor global
-`MainStatusTrackingBarContainer` (ese sí es un global real y estable),
-pero como un hijo **anónimo**: lo que `/fstack` muestra como
-`MainStatusTrackingBarContainer.<hash>` no es una variable global, es
-solo cómo esa herramienta representa un frame sin nombre — cambia cada
-vez que Blizzard lo crea, así que no se puede referenciar así. Además
-el contenedor puede tener más de un hijo a la vez: confirmado en el
-juego que con el seguimiento de reputación también activo aparecen dos
-hijos con `.StatusBar`. `ui/xp_bar.lua: FindNativeXPBar()` localiza el
-correcto en tiempo de ejecución comparando el máximo de cada
-`child.StatusBar:GetMinMaxValues()` contra `UnitXPMax("player")` —
-confirmado en el juego que solo el de la xp coincide (el de reputación
-tenía un máximo normalizado a `1`, no el rango real). A nivel máximo
-(`UnitXPMax` es `0`) no hay barra que anclar y no se loguea error;
-si hubiera contenedor pero ninguno de sus hijos coincidiera con un
-`UnitXPMax` positivo, `AnchorToNativeBar` loguea a ERROR una sola vez.
+**Localización de la barra nativa, multi-cliente** (`ui/xp_bar.lua:
+FindNativeXPBar`, reescrito 2026-09-17 para el porte a WoW Forever —
+ver "Multi-cliente" al principio de este documento): resuelve en
+tiempo de ejecución, probando en orden y quedándose con el primero que
+exista, dos candidatos — `MainStatusTrackingBarContainer`,
+`MainMenuExpBar` — **nunca** el hijo de nombre generado en runtime
+(p.ej. `MainStatusTrackingBarContainer.1b57a533670`, que cambia entre
+sesiones: lo que `/fstack` muestra así no es una variable global, es
+solo cómo esa herramienta representa un frame sin nombre).
+
+- **`MainStatusTrackingBarContainer`** (confirmado en el juego con
+  `/fstack` tanto en Classic Era 1.15.x como en la beta de WoW Forever
+  — la suposición inicial de que Classic Era usaba `MainMenuExpBar`,
+  la barra clásica de Vanilla, era incorrecta): sistema de barras de
+  seguimiento compartido con retail
+  (`Interface/AddOns/Blizzard_ActionBar/Classic/StatusTrackingBarTemplate.xml`).
+  Dentro de él, `Ledger.FindMatchingChild(container)` busca el hijo
+  cuyo `child.StatusBar:GetMinMaxValues()` coincide con
+  `UnitXPMax("player")` — necesario en Classic Era porque el
+  contenedor puede tener más de un hijo a la vez (confirmado en el
+  juego que con el seguimiento de reputación también activo aparecen
+  dos hijos con `.StatusBar`; el de reputación tiene un máximo
+  normalizado a `1`, no el rango real, así que comparar por
+  `UnitXPMax` los distingue). Si hay hijo que coincide, se usa ESE
+  como ancla (su anchura/posición, no las del contenedor) — el
+  comportamiento de Classic Era no cambia respecto a antes del porte.
+  Si NO hay ningún hijo que coincida (WoW Forever: su contenedor no
+  tiene esa estructura de hijos, sus hijos se anclan TOPLEFT/BOTTOMRIGHT
+  sin offset), se usa el **contenedor mismo** como ancla directamente
+  — sirve porque su geometría ya es la de la barra.
+- **`MainMenuExpBar`**: fallback defensivo si el contenedor de arriba
+  no existe en absoluto. Nunca alcanzado en ninguno de los dos
+  clientes confirmados hasta ahora (los dos tienen
+  `MainStatusTrackingBarContainer`); existe por si un cliente futuro
+  (o uno más antiguo) careciera de ambas formas del contenedor.
+- **Degradación si no existe ningún candidato** (`ui/xp_bar.lua:
+  DegradedAnchor`): en vez de no dibujar nada, la barra se coloca en
+  una posición por defecto (`LedgerDB.barDefaultPos`, `Ledger.DEFAULTS
+  .barDefaultPos` si no hay guardada) con una anchura fija
+  (`Ledger.DEFAULTS.barDefaultWidth = 200`) y se vuelve arrastrable
+  (`frame:RegisterForDrag`, guardando la nueva posición en
+  `LedgerDB.barDefaultPos` al soltar) — nunca cuando está anclada de
+  verdad: en ese caso arrastrar no serviría de nada, la próxima
+  redibujada la volvería a pegar al ancla nativa, así que un flag local
+  (`inDegradedMode`, no `EnableMouse`: el ratón se queda siempre
+  activo, lo necesita el tooltip pase lo que pase) decide si
+  `OnDragStart` hace algo o no. Se avisa una única vez por sesión a
+  nivel INFO (`Ledger.Log("info", ...)`, nunca ERROR: es un modo
+  soportado, no una rotura) la primera vez que se degrada.
+- **Nunca constantes**: tanto en modo nativo como degradado, la
+  anchura y posición salen siempre del frame resuelto
+  (`nativeBar:GetWidth()`) o de la SavedVariable/default degradados —
+  ninguna constante de anchura hardcodeada salvo
+  `Ledger.DEFAULTS.barDefaultWidth`, que es explícitamente el valor de
+  emergencia, no el camino normal.
+- **Reancla en `PLAYER_ENTERING_WORLD` y `UI_SCALE_CHANGED`**
+  (`ui/events.lua`): ambos disparan `Ledger.RedrawXPBarFull()` +
+  `Ledger.RedrawTimeBar()`, que vuelven a resolver el ancla desde cero
+  cada vez (nunca cacheada) — cubre tanto que
+  `Blizzard_StatusTrackingBar` cargue tarde (no estaba disponible en
+  el primer `PLAYER_LOGIN` pero sí en una pantalla de carga posterior)
+  como que la interfaz se recoloque al cambiar la escala de UI.
+- **`Ledger.xpBarAnchorInfo`**: cada `AnchorToNativeBar` deja aquí
+  `{ source=, width=, height= }` (`source` describe qué se resolvió:
+  `"MainStatusTrackingBarContainer (matched child)"`,
+  `"MainStatusTrackingBarContainer (container)"`, `"MainMenuExpBar"` o
+  `"degraded (no anchor found)"`) — lo lee `/ldg probe` (ver
+  "Diagnóstico de compatibilidad" abajo) para poder ver de un vistazo,
+  en cualquier cliente, qué ancla se resolvió de verdad.
 
 ### Barra de reparto de tiempo (`core/time_bar.lua` + `ui/time_bar.lua`, `/ldg time`)
 
@@ -913,6 +961,14 @@ o que casca al llamarla no impide ver el resto del informe.
 - **`C_ChatInfo`**: presencia simple (`C_ChatInfo ~= nil`), sin llamar a
   nada dentro — no se usa en ningún sitio del addon todavía, se prueba
   como referencia de cara a un futuro filtrado de canal de chat.
+- **Ancla de la barra de xp** (`xpBarAnchor`, leído de
+  `Ledger.xpBarAnchorInfo` — ver "Barra de composición de xp" arriba,
+  sección "Localización de la barra nativa"): qué frame se resolvió de
+  verdad (contenedor, hijo emparejado, `MainMenuExpBar` o degradado) y
+  sus dimensiones, para diagnosticar de un vistazo si un cliente dado
+  está anclando donde toca sin tener que abrir `/fstack`. `"not
+  resolved yet"` si la barra nunca se ha redibujado esta sesión (p.ej.
+  `/ldg bar` nunca se ha activado).
 
 **Degradación con gracia fuera del propio probe**: `RequestTimePlayed`
 (el único de los API arriba con un punto de llamada real, en
@@ -1175,3 +1231,16 @@ falta en el `.toc`).
   con otra forma), decidir entonces si conviene ramificar algún camino
   del addon por versión de interface — hoy no hay ninguna rama de ese
   tipo en ningún sitio.
+- Verificar en el juego la resolución de ancla de la barra de xp (ver
+  "Localización de la barra nativa" arriba, reescrita para el porte a
+  WoW Forever, nunca probada tal cual): en Classic Era, que
+  `xpBarAnchor` en `/ldg probe` siga marcando `"...matched child"` y
+  que el comportamiento visual sea idéntico a antes del porte; en WoW
+  Forever, que el contenedor sin hijo emparejado ancle bien usando su
+  propia geometría (`"...container"`); forzando el caso degradado
+  (renombrando temporalmente ambos globales, o en un cliente que
+  careciera de los dos) que la barra aparezca en la posición por
+  defecto, se pueda arrastrar, la nueva posición sobreviva a un
+  `/reload`, y el aviso INFO salga una sola vez por sesión; y que
+  `UI_SCALE_CHANGED` reancle de verdad al cambiar la escala de la UI
+  (`Configuración → Interfaz`), no solo `PLAYER_ENTERING_WORLD`.

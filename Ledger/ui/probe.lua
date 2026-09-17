@@ -100,5 +100,9 @@ function Ledger.GatherProbeData()
         apis            = apis,
         xpGainGlobals   = GatherXPGainGlobals(),
         chatInfoPresent = C_ChatInfo ~= nil,
+        -- Set by ui/xp_bar.lua: AnchorToNativeBar on every redraw; nil
+        -- if the xp bar has never been redrawn yet this session (e.g.
+        -- /ldg bar was never turned on).
+        xpBarAnchor     = Ledger.xpBarAnchorInfo,
     }
 end

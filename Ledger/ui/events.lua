@@ -93,7 +93,11 @@ SlashCmdList["LEDGER"] = function(msg)
         if not shown then
             Print("xp composition bar: hidden")
         elseif not ok then
-            Print("xp composition bar: shown, but the native xp bar could not be found to anchor to (there is none at max level; if that's not the case, try /ldg log trace and /ldg log chat and try again)")
+            -- No longer expected in practice: AnchorToNativeBar always
+            -- resolves to something now, native or degraded (see
+            -- ui/xp_bar.lua). Kept as a defensive fallback message in
+            -- case frame:GetWidth() ever comes back unusable.
+            Print("xp composition bar: shown, but could not be sized -- try /ldg log trace and /ldg log chat and try again")
         elseif segmentCount == 0 then
             Print(string.format(
                 "xp composition bar: shown (width=%dpx), but no xp recorded yet on this level -- gain some xp to see it fill up",
@@ -149,6 +153,7 @@ ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_LOGOUT")
 ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_XP_UPDATE")
+ev:RegisterEvent("UI_SCALE_CHANGED")
 ev:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" then
         -- SavedVariables are already loaded by the time our own name arrives.
@@ -179,7 +184,16 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         -- Login and every loading screen (zone, instance, resurrection).
         Ledger.UpdateXP()
         -- Safety net: if the native bar didn't have its final width yet
-        -- at PLAYER_LOGIN, it does by now.
+        -- at PLAYER_LOGIN, it does by now -- also covers
+        -- Blizzard_StatusTrackingBar loading late (see ui/xp_bar.lua).
+        Ledger.RedrawXPBarFull()
+        Ledger.RedrawTimeBar()
+
+    elseif event == "UI_SCALE_CHANGED" then
+        -- The scale changing can shift the native bar's on-screen
+        -- geometry, or Blizzard_StatusTrackingBar can get repositioned
+        -- -- reanchor both bars instead of letting them drift out of
+        -- place until the next PLAYER_ENTERING_WORLD.
         Ledger.RedrawXPBarFull()
         Ledger.RedrawTimeBar()
 

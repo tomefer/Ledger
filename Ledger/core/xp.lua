@@ -9,12 +9,19 @@ print("Ledger: core/xp.lua")
 Ledger.DB_VERSION = 5
 
 Ledger.DEFAULTS = {
-    pos           = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
-    shown         = false,
-    includeRested = true,
-    barShown      = false,
-    barHeight     = 8,
-    timeBarShown  = false,
+    pos             = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
+    shown           = false,
+    includeRested   = true,
+    barShown        = false,
+    barHeight       = 8,
+    timeBarShown    = false,
+    -- Fallback position/width for the xp composition bar when no
+    -- native bar can be found to anchor to (ui/xp_bar.lua:
+    -- DegradedAnchor). barDefaultPos is overwritten in LedgerDB once
+    -- the player drags the bar in that mode; barDefaultWidth isn't
+    -- user-configurable (no resize handle), just a sane fixed size.
+    barDefaultPos   = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 120 },
+    barDefaultWidth = 200,
 }
 
 -- Historical schema of the xp series in version 2 (before splitting the

@@ -101,6 +101,28 @@ describe("core/probe.lua", function()
         end)
     end)
 
+    describe("FormatProbe: XP bar anchor", function()
+        it("reports not resolved yet when nil", function()
+            local text = Ledger.FormatProbe({})
+            assert.is_not_nil(text:find("XP bar anchor: not resolved yet", 1, true))
+        end)
+
+        it("reports the resolved source and dimensions", function()
+            local text = Ledger.FormatProbe({
+                xpBarAnchor = { source = "MainStatusTrackingBarContainer (matched child)", width = 200, height = 8 },
+            })
+            assert.is_not_nil(text:find(
+                "XP bar anchor: MainStatusTrackingBarContainer (matched child) (width=200, height=8)", 1, true))
+        end)
+
+        it("reports the degraded fallback source", function()
+            local text = Ledger.FormatProbe({
+                xpBarAnchor = { source = "degraded (no anchor found)", width = 200, height = 8 },
+            })
+            assert.is_not_nil(text:find("XP bar anchor: degraded (no anchor found)", 1, true))
+        end)
+    end)
+
     describe("FormatProbe: no data at all", function()
         it("nil data doesn't blow up and reports everything absent/empty", function()
             local text = Ledger.FormatProbe(nil)

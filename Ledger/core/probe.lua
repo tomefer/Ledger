@@ -45,12 +45,25 @@ local function FormatBuild(build)
         tostring(build.version), tostring(build.build), tostring(build.date), tostring(build.tocversion))
 end
 
+-- One line for the xp bar's resolved anchor (see ui/xp_bar.lua:
+-- Ledger.xpBarAnchorInfo, set on every AnchorToNativeBar call): the
+-- source description (which candidate matched, or "degraded" if none
+-- did) plus the width/height actually resolved.
+local function FormatAnchor(anchor)
+    if not anchor then
+        return "  XP bar anchor: not resolved yet (bar never drawn this session)"
+    end
+    return string.format("  XP bar anchor: %s (width=%s, height=%s)",
+        tostring(anchor.source), tostring(anchor.width), tostring(anchor.height))
+end
+
 -- data shape (see ui/probe.lua: Ledger.GatherProbeData):
 -- {
 --   build           = { present=, callFailed=, error=, version=, build=, date=, tocversion= },
 --   apis            = { { name=, present=, callFailed=, error=, values= }, ... },  -- fixed order
 --   xpGainGlobals   = { "COMBATLOG_XPGAIN_...", ... },  -- sorted, may include the EXHAUSTION family too
 --   chatInfoPresent = true|false,
+--   xpBarAnchor     = { source=, width=, height= } | nil,
 -- }
 function Ledger.FormatProbe(data)
     data = data or {}
@@ -70,6 +83,8 @@ function Ledger.FormatProbe(data)
     end
 
     table.insert(lines, "  C_ChatInfo: " .. (data.chatInfoPresent and "present" or "absent"))
+
+    table.insert(lines, FormatAnchor(data.xpBarAnchor))
 
     return table.concat(lines, "\n")
 end
