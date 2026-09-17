@@ -1,17 +1,18 @@
 -- Ledger - ui/frame.lua
--- Frame principal y su persistencia. Capa fina: aqui si se usa la API de WoW.
+-- Main frame and its persistence. Thin layer: this is where WoW API
+-- usage is fine.
 
 local ADDON_NAME, Ledger = ...
 
-local SavePosition -- declaracion adelantada (se usa en OnDragStop)
+local SavePosition -- forward declaration (used in OnDragStop)
 
 ----------------------------------------------------------------------
--- Frame principal
+-- Main frame
 ----------------------------------------------------------------------
 
 local frame = CreateFrame("Frame", "LedgerFrame", UIParent, "BackdropTemplate")
 frame:SetSize(200, 96)
-frame:SetPoint("CENTER")            -- provisional, se sobrescribe al login
+frame:SetPoint("CENTER")            -- provisional, overwritten on login
 frame:SetClampedToScreen(true)
 frame:SetFrameStrata("MEDIUM")
 frame:Hide()
@@ -24,7 +25,7 @@ frame:SetBackdrop({
     edgeSize = 16,
     insets   = { left = 4, right = 4, top = 4, bottom = 4 },
 })
-frame:SetBackdropColor(0, 0, 0, 0.6)          -- fondo negro semitransparente
+frame:SetBackdropColor(0, 0, 0, 0.6)          -- semi-transparent black background
 frame:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
 
 frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -39,11 +40,11 @@ frame.xpText:SetPoint("CENTER", 0, -4)
 frame.pctText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 frame.pctText:SetPoint("CENTER", 0, -20)
 
--- "Descanso: incluido" / "Descanso: excluido" (toggle /ldg rested)
+-- "Rested: included" / "Rested: excluded" (toggle /ldg rested)
 frame.restedText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 frame.restedText:SetPoint("BOTTOM", 0, 10)
 
--- Arrastre con el boton izquierdo
+-- Drag with the left button
 frame:EnableMouse(true)
 frame:SetMovable(true)
 frame:RegisterForDrag("LeftButton")
@@ -56,7 +57,7 @@ end)
 Ledger.frame = frame
 
 ----------------------------------------------------------------------
--- Actualizacion de experiencia
+-- Xp update
 ----------------------------------------------------------------------
 
 function Ledger.UpdateXP()
@@ -68,16 +69,17 @@ function Ledger.UpdateXP()
     Ledger.UpdateRestedLabel()
 end
 
--- Refleja en el panel principal si el bono por descanso cuenta en las
--- metricas de xp de sesion/nivel (LedgerDB.includeRested, toggle
--- /ldg rested). Solo indica el estado: no recalcula nada por si solo.
+-- Reflects on the main panel whether the rested bonus counts toward the
+-- session/level xp metrics (LedgerDB.includeRested, /ldg rested
+-- toggle). Only indicates the state: it doesn't recompute anything on
+-- its own.
 function Ledger.UpdateRestedLabel()
     if not LedgerDB then return end
-    frame.restedText:SetText(LedgerDB.includeRested and "Descanso: incluido" or "Descanso: excluido")
+    frame.restedText:SetText(LedgerDB.includeRested and "Rested: included" or "Rested: excluded")
 end
 
 ----------------------------------------------------------------------
--- Persistencia
+-- Persistence
 ----------------------------------------------------------------------
 
 function SavePosition()
@@ -95,7 +97,7 @@ Ledger.SavePosition = SavePosition
 function Ledger.RestorePosition()
     local p = LedgerDB.pos
     frame:ClearAllPoints()
-    -- Anclamos siempre a UIParent: guardar una referencia a otro frame
-    -- no es fiable entre sesiones.
+    -- Always anchor to UIParent: saving a reference to another frame
+    -- isn't reliable across sessions.
     frame:SetPoint(p.point, UIParent, p.relativePoint, p.x, p.y)
 end

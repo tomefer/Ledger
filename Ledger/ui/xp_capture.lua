@@ -1,26 +1,26 @@
 -- Ledger - ui/xp_capture.lua
--- Traduce los eventos de WoW relacionados con ganar xp, morir/resucitar
--- y el tiempo jugado a llamadas de core/. Capa fina: toda la logica de
--- emparejar cantidad+origen, acumular buckets de tiempo y componer la
--- sesion vive en core/; aqui solo se leen las APIs de WoW y se llama.
+-- Translates WoW events related to gaining xp, dying/resurrecting and
+-- played time into core/ calls. Thin layer: all the logic for pairing
+-- amount+source, accumulating time buckets and composing the session
+-- lives in core/; this file only reads WoW APIs and calls into it.
 
 local ADDON_NAME, Ledger = ...
 
 ----------------------------------------------------------------------
--- Patrones de xp de combate, construidos en caliente desde TODOS los
--- global strings reales del cliente cuyo nombre empiece por
--- "COMBATLOG_XPGAIN_" (nunca hardcodeados ni filtrados a una lista fija:
--- el propio cliente dice que variantes existen, en cualquier idioma).
--- No hace falta restringir a las variantes "FIRSTPERSON": el propio
--- evento CHAT_MSG_COMBAT_XP_GAIN ya solo se dispara para xp del
--- jugador, y core/chat_patterns.lua: Ledger.ClassifyXPGainMatch usa la
--- presencia (o no) de un nombre de criatura en la variante que casa
--- para distinguir "kill" de "explore" -- nunca "unknown", porque el
--- evento en si ya confirma que es xp de combate o exploracion.
+-- Combat xp patterns, built at load time from ALL of the client's real
+-- global strings whose name starts with "COMBATLOG_XPGAIN_" (never
+-- hardcoded nor filtered to a fixed list: the client itself says which
+-- variants exist, in any language). No need to restrict to
+-- "FIRSTPERSON" variants: the CHAT_MSG_COMBAT_XP_GAIN event itself
+-- already only fires for the player's own xp, and
+-- core/chat_patterns.lua: Ledger.ClassifyXPGainMatch uses the presence
+-- (or not) of a creature name in the matching variant to tell "kill"
+-- apart from "explore" -- never "unknown", because the event itself
+-- already confirms it's combat or exploration xp.
 ----------------------------------------------------------------------
 
--- Guarda tambien el nombre del global string y su texto literal (no solo
--- el patron derivado), para poder inspeccionarlos con /ldg strings.
+-- Also stores the global string's name and its literal text (not just
+-- the derived pattern), so they can be inspected with /ldg strings.
 local xpGainStrings = {}
 for key, value in pairs(_G) do
     if type(value) == "string" and key:find("^COMBATLOG_XPGAIN_") then
@@ -29,14 +29,14 @@ for key, value in pairs(_G) do
 end
 Ledger.xpGainStrings = xpGainStrings
 
--- El sufijo de bono por descanso ("(+86 exp Rested bonus)") va pegado
--- al final del mensaje de xp de combate, no al principio, asi que se
--- busca con un patron sin anclar (Ledger.BuildSuffixPattern) contra una
--- familia de global strings aparte. MEJOR ESFUERZO, SIN CONFIRMAR EN
--- EL JUEGO: se asume que existen como COMBATLOG_XPGAIN_EXHAUSTION*
--- (convencion de Blizzard para el bono por descanso/agotamiento desde
--- hace varias expansiones) -- comprobar con /ldg strings, que imprime
--- tambien esta familia con su valor literal en este cliente.
+-- The rested-bonus suffix ("(+86 exp Rested bonus)") is attached to the
+-- end of the combat xp message, not the start, so it's searched for
+-- with an unanchored pattern (Ledger.BuildSuffixPattern) against a
+-- separate family of global strings. BEST EFFORT, UNCONFIRMED IN-GAME:
+-- it's assumed they exist as COMBATLOG_XPGAIN_EXHAUSTION* (Blizzard's
+-- convention for the rested/exhaustion bonus for several expansions
+-- now) -- check with /ldg strings, which also prints this family with
+-- its literal value in this client.
 local restedStrings = {}
 for key, value in pairs(_G) do
     if type(value) == "string" and key:find("^COMBATLOG_XPGAIN_EXHAUSTION") then
@@ -45,18 +45,18 @@ for key, value in pairs(_G) do
 end
 Ledger.restedStrings = restedStrings
 
--- Clasifica el mensaje (core/chat_patterns.lua: Ledger.ClassifyXPGainMatch,
--- logica pura) y loguea a TRACE cada variante probada (casada o no, y lo
--- capturado si caso), mas la categoria final resultante. Ademas extrae
--- el bono por descanso si el mensaje trae el sufijo (Ledger.ExtractRestedBonus,
--- tambien pura). Devuelve category, rested.
+-- Classifies the message (core/chat_patterns.lua: Ledger.ClassifyXPGainMatch,
+-- pure logic) and logs every variant tried at TRACE level (matched or
+-- not, and what it captured if it matched), plus the resulting final
+-- category. Also extracts the rested bonus if the message carries the
+-- suffix (Ledger.ExtractRestedBonus, also pure). Returns category, rested.
 local function HandleCombatXPGainMessage(msg, t)
     local category, attempts = Ledger.ClassifyXPGainMatch(xpGainStrings, msg)
 
     for _, attempt in ipairs(attempts) do
         if attempt.matched then
             Ledger.Log("trace", string.format(
-                "CHAT_MSG_COMBAT_XP_GAIN match t=%.3f global=%s pattern=%s captured=[%s] categoria=%s",
+                "CHAT_MSG_COMBAT_XP_GAIN match t=%.3f global=%s pattern=%s captured=[%s] category=%s",
                 t, attempt.name, attempt.pattern, table.concat(attempt.captured, ", "), category))
         else
             Ledger.Log("trace", string.format(
@@ -67,49 +67,58 @@ local function HandleCombatXPGainMessage(msg, t)
 
     if #attempts == 0 or not attempts[#attempts].matched then
         Ledger.Log("trace", string.format(
-            "CHAT_MSG_COMBAT_XP_GAIN t=%.3f ninguna variante caso -- categoria por defecto %s (nunca unknown)",
+            "CHAT_MSG_COMBAT_XP_GAIN t=%.3f no variant matched -- default category %s (never unknown)",
             t, category))
     end
 
     local rested = Ledger.ExtractRestedBonus(restedStrings, msg)
     if rested > 0 then
         Ledger.Log("trace", string.format(
-            "CHAT_MSG_COMBAT_XP_GAIN t=%.3f bono por descanso detectado: rested=%d", t, rested))
+            "CHAT_MSG_COMBAT_XP_GAIN t=%.3f rested bonus detected: rested=%d", t, rested))
     end
 
     return category, rested
 end
 
 ----------------------------------------------------------------------
--- Estado: todas las sesiones del nivel actual (la ultima es la activa),
--- el tracker de buckets de tiempo y el buffer que empareja cantidad
--- (PLAYER_XP_UPDATE) con origen (mensaje de combate).
+-- State: all sessions of the current level (the last one is active),
+-- the time-bucket tracker and the buffer that pairs amount
+-- (PLAYER_XP_UPDATE) with source (combat message).
 --
--- `sessions` no es una copia en memoria: es la MISMA tabla que
--- LedgerCharDB.sessions (asignada por referencia en StartTracking), asi
--- que anadir una sesion o un evento a una sesion ya existente escribe
--- directamente en la SavedVariable, sin ningun paso de "guardado"
--- aparte. Las sesiones cerradas se conservan aqui hasta el cierre de
--- nivel: ese cierre (core/level_close.lua + Ledger.RecordLevelClose)
--- agrega TODAS las sesiones del nivel, no solo la ultima.
+-- `sessions` is not an in-memory copy: it IS the same table as
+-- LedgerCharDB.sessions (assigned by reference in StartTracking), so
+-- adding a session or an event to an existing session writes directly
+-- into the SavedVariable, with no separate "save" step. Closed sessions
+-- are kept here until the level closes: that close (core/level_close.lua
+-- + Ledger.RecordLevelClose) aggregates ALL of the level's sessions,
+-- not just the last one.
 ----------------------------------------------------------------------
 
-local sessions -- nil hasta el primer PLAYER_ENTERING_WORLD
+local sessions -- nil until the first PLAYER_ENTERING_WORLD
 local timeTracker
 local matcher
 local reconciler
 local previousXP
-local previousMaxXP -- UnitXPMax cacheado: ver PLAYER_XP_UPDATE, nunca
-                     -- se lee UnitXPMax en el instante de un ding
+local previousMaxXP -- cached UnitXPMax: see PLAYER_XP_UPDATE, never
+                     -- read UnitXPMax at the instant of a ding
 local previousLevel
 
--- Reloj de inactividad para los buckets de tiempo (core/time_buckets.lua):
--- el instante de la ultima señal de actividad, la mas reciente entre
--- una ganancia de xp y una entrada en combate (PLAYER_REGEN_DISABLED).
--- Nunca UnitAffectingCombat como reloj: se sale de combate
--- constantemente entre pull y pull, y eso no significa que se haya
--- dejado de "estar activo" para el umbral (Ledger.INACTIVITY_THRESHOLD,
--- 30s).
+-- GetTime() corresponding to offset 0 of the current session.
+-- session.t0 no longer serves this purpose (see OpenSession: it's now
+-- time(), absolute, not GetTime()): sessionStartRef is only for
+-- computing offsets within the current session, and gets rebound
+-- whenever `sessions` starts pointing at a different session (a new one
+-- or one resumed after /reload), so the offset keeps counting from
+-- where it left off without depending on GetTime() surviving a client
+-- restart.
+local sessionStartRef
+
+-- Inactivity clock for the time buckets (core/time_buckets.lua): the
+-- instant of the last activity signal, the more recent of an xp gain
+-- and entering combat (PLAYER_REGEN_DISABLED). Never
+-- UnitAffectingCombat as the clock: you leave combat constantly between
+-- pulls, and that doesn't mean you've stopped being "active" for the
+-- inactivity threshold (Ledger.INACTIVITY_THRESHOLD, 30s).
 local lastXPGainTime
 local lastCombatEnterTime
 
@@ -118,172 +127,208 @@ local function CurrentSession()
     return sessions[#sessions]
 end
 
+-- Opens a new session. t0 is stored as absolute time() (survives a
+-- client restart; GetTime() doesn't) -- see Real SavedVariables
+-- analysis, point 3. sessionStartRef (the GetTime() reference for THIS
+-- session's offsets) gets rebound right here to "now": the new
+-- session's first event falls at offset 0.
 local function OpenSession(t, level, manual)
-    local session = Ledger.NewSession(t, level, nil, manual)
+    local session = Ledger.NewSession(time(), level, nil, manual)
     table.insert(sessions, session)
+    sessionStartRef = t
     return session
 end
 
--- Graba el evento y, si la fuente traia su propia cantidad
--- (expectedXP: p.ej. el arg2 de QUEST_TURNED_IN), la contrasta contra
--- el delta real de UnitXP -- que es siempre el que se graba, la
--- discrepancia es solo una señal de alarma. Tambien alimenta el
--- contador de reconciliacion con lo que realmente se ha llegado a
--- grabar (ver PLAYER_XP_UPDATE para el lado de lo esperado).
-local function EmitEvent(paired)
-    if paired.expectedXP and paired.expectedXP ~= paired.xp then
-        Ledger.Log("error", string.format(
-            "discrepancia de xp: fuente %s reporto %d, delta real de UnitXP fue %d -- se graba el delta (UnitXP manda)",
-            paired.src, paired.expectedXP, paired.xp))
-    end
+-- Closes the current level: aggregates all in-progress sessions (whole
+-- and entirely of that level, the boundary is never detected here)
+-- into the `levels` entry and opens the new level's session. Always
+-- triggered by EmitCrossingEvent (below), never by PLAYER_LEVEL_UP
+-- directly: that event today is only diagnostic and refreshes the
+-- panel, see the dispatcher.
+--
+-- totalPlayed comes from subtracting LedgerCharDB.levelStartTotalPlayed
+-- (the CHARACTER's total played time according to TIME_PLAYED_MSG, at
+-- the instant the current level started being tracked) from the last
+-- known total: self-correcting against lost sessions, because that
+-- total is computed by the server and is always exact. Activity buckets
+-- (active/idle/travel/dead) are a separate metric -- how that time is
+-- split, not how much it is -- and keep getting aggregated as-is into
+-- entry.buckets via Ledger.CloseLevel.
+local function CloseCurrentLevel(t)
+    if not sessions or #sessions == 0 then return end
 
-    Ledger.AccountRecordedXP(reconciler, paired.xp)
-
-    local session = CurrentSession()
-    if not session then return end
-    local offset = (paired.t - session.t0) * 10 -- decimas de segundo
-    Ledger.AddEvent(session, offset, paired.xp, paired.src, paired.rested)
-    Ledger.ExtendXPBar()
-end
-
--- Engancha `sessions` a LedgerCharDB.sessions (garantizado por
--- Ledger.InitCharDB en ADDON_LOADED, que corre antes de que este evento
--- pueda llegar). Si ya habia sesiones sin cerrar de una partida anterior
--- del mismo nivel, se sigue escribiendo en ellas; si no habia ninguna,
--- se abre la primera y se guarda en ella `initialXP`: la xp que el
--- jugador ya llevaba en este nivel antes de que el addon empezara a
--- registrar (UnitXP en este instante, ya que la xp registrada es
--- todavia 0). Solo se calcula esta vez -- vive en la sesion, que ya es
--- la SavedVariable real, asi que sobrevive a /reload -- para el
--- segmento gris inicial de la barra de composicion de xp
--- (core/xp_bar.lua).
-local function StartTracking(t, level)
-    sessions = LedgerCharDB.sessions
-    if #sessions == 0 then
-        local session = OpenSession(t, level, false)
-        session.initialXP = UnitXP("player")
-    end
-    timeTracker = Ledger.NewTracker(t, "idle")
-    -- Reengancha el tracker a los buckets YA PERSISTIDOS de la sesion
-    -- actual (misma tabla, no una copia): cualquier AddSample futuro
-    -- escribe directamente en la sesion (SavedVariable), sin paso de
-    -- guardado aparte -- igual que sessions/session.e. Si la sesion es
-    -- nueva sus buckets ya estan a cero (Ledger.NewSession); si se
-    -- retoma tras un /reload, sigue por donde lo dejo.
-    timeTracker.buckets = CurrentSession().buckets
-    Ledger.timeTracker = timeTracker -- expuesto para ui/time_bar.lua
-    matcher     = Ledger.NewMatcher()
-    reconciler  = Ledger.NewReconciler()
-end
-
--- Segundos que se espera tras un PLAYER_LEVEL_UP a que llegue un evento
--- de xp (PLAYER_XP_UPDATE, CHAT_MSG_COMBAT_XP_GAIN o QUEST_TURNED_IN)
--- antes de cerrar el nivel viejo por temporizador. El cierre nunca debe
--- depender de que llegue un evento que quiza no llegue (p.ej. una
--- entrega de mision que no dispara CHAT_MSG_COMBAT_XP_GAIN si no casa
--- ningun patron... aunque hoy siempre clasifica algo, ver
--- core/chat_patterns.lua): por eso hay temporizador de respaldo.
-Ledger.PENDING_LEVEL_UP_TIMEOUT = 0.25
-
--- No nil mientras hay una subida de nivel esperando a cerrarse:
--- { oldLevel=, timer= }. oldLevel es el nivel que hay que cerrar
--- (previousLevel cacheado en el momento del ding). timer es el
--- C_Timer.NewTimer de respaldo, cancelable si se consume antes por un
--- evento de xp.
-local pendingLevelUp
-
--- Cierra oldLevel (todas las sesiones actuales, que en este punto son
--- integramente de ese nivel) y abre la sesion del nivel nuevo, sin
--- esperar a nada mas. Idempotente: si ya se proceso (pendingLevelUp ya
--- es nil), no hace nada -- necesario porque puede llamarse tanto desde
--- el primer evento de xp que llegue como desde el temporizador de
--- respaldo, y ambos podrian dispararse casi a la vez.
-local function ProcessPendingLevelUp(t, reason)
-    if not pendingLevelUp then return end
-    local oldLevel = pendingLevelUp.oldLevel
-    if pendingLevelUp.timer then
-        pendingLevelUp.timer:Cancel()
-    end
-    pendingLevelUp = nil
-
-    Ledger.Log("trace", string.format(
-        "CierreNivel: consumida subida pendiente (nivel viejo=%d) via %s, t=%.3f", oldLevel, reason, t))
-
-    local totalPlayed = 0
     if timeTracker then
-        -- Cierra el tramo de tiempo hasta ahora sin cambiar de estado,
-        -- para que el total incluya lo transcurrido desde la ultima
-        -- muestra.
+        -- Closes the ongoing time stretch up to now, so entry.buckets
+        -- includes everything elapsed since the last sample.
         Ledger.AddSample(timeTracker, t, timeTracker.lastState)
-        local b = timeTracker.buckets
-        totalPlayed = b.active + b.idle + b.travel + b.dead
     end
+
+    local totalPlayed = (LedgerCharDB.lastKnownTotalTimePlayed or 0) - (LedgerCharDB.levelStartTotalPlayed or 0)
+    if totalPlayed < 0 then totalPlayed = 0 end
 
     local entry = Ledger.CloseLevel(sessions, totalPlayed, LedgerDB.includeRested)
     Ledger.RecordLevelClose(LedgerCharDB, entry)
     Ledger.Log("trace", string.format(
-        "CierreNivel: cerrado nivel %d, %d sesion(es) agregadas, totalXP=%d, totalPlayed=%ds",
-        entry.nivel, #sessions, entry.totalXP, entry.totalPlayed))
+        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%ds, deaths=%d",
+        entry.level, #sessions, entry.totalXP, entry.totalPlayed, entry.deaths))
 
-    -- Abre la sesion del nivel nuevo. No se reutiliza StartTracking
-    -- aqui: su snapshot de initialXP (para arranques en frio) daria por
-    -- perdida la xp que ya hay en el nivel nuevo, pero esa xp NO esta
-    -- perdida -- si esto lo ha disparado un evento de xp de verdad
-    -- (no el temporizador), ese mismo evento va a grabarla a
-    -- continuacion como un evento normal con su src real. Ponerla
-    -- ademas como initialXP la contaria dos veces (una vez como
-    -- segmento gris "previous" y otra como el evento). Solo se
-    -- snapshotea initialXP cuando el disparador es el temporizador de
-    -- respaldo: ahi no hay ningun evento en camino que vaya a
-    -- explicarla, igual que un arranque en frio.
     LedgerCharDB.sessions = {}
     sessions = LedgerCharDB.sessions
     local newSession = OpenSession(t, UnitLevel("player"), false)
-    if reason == "temporizador" or reason == "PLAYER_LEVEL_UP duplicado" then
-        newSession.initialXP = UnitXP("player")
-    end
+    newSession.reached = time()
+
+    -- Snapshot of the character's total played time for the next
+    -- close, and a fresh request so it updates as soon as possible
+    -- (TIME_PLAYED_MSG arrives asynchronously: see the dispatcher).
+    LedgerCharDB.levelStartTotalPlayed = LedgerCharDB.lastKnownTotalTimePlayed or 0
+    RequestTimePlayed()
 
     timeTracker = Ledger.NewTracker(t, "idle")
     timeTracker.buckets = newSession.buckets
     Ledger.timeTracker = timeTracker
-    matcher     = Ledger.NewMatcher()
-    reconciler  = Ledger.NewReconciler()
+    matcher    = Ledger.NewMatcher()
+    reconciler = Ledger.NewReconciler()
 
     Ledger.RedrawXPBarFull()
     Ledger.RedrawTimeBar()
 end
 
--- Borra por completo LedgerCharDB (todas las sesiones y niveles
--- guardados de este personaje) y arranca el seguimiento desde cero,
--- sin necesidad de /reload: vacia sessions/levels, reengancha
--- `sessions` a la tabla nueva (StartTracking) y abre la primera sesion
--- del nivel actual con initialXP = xp actual (igual que un personaje
--- nuevo). Reinicia tambien matcher/tracker/reconciler (via
--- StartTracking) y la referencia previousXP/previousMaxXP/previousLevel
--- para que el primer PLAYER_XP_UPDATE tras el borrado no calcule un
--- delta falso. Accion irreversible: pensada para /ldg wipe confirm.
+-- An xp event that crosses a ding arrives here already paired with its
+-- real src (paired.crossing was set by Ledger.ComputeXPDelta and has
+-- traveled attached through the matcher -- core/xp_gain_matcher.lua --
+-- so the real source, whenever it arrives, gets applied to the WHOLE
+-- event before it's split: if it were split before pairing, only one
+-- of the two halves could match the source and the other would be
+-- released as "unknown"). It's split into two entries that add up to
+-- exactly paired.xp: the one that completes the old level
+-- (crossing.oldPart) is recorded into the not-yet-rotated session and
+-- that level is then closed; the one that opens the new one
+-- (crossing.newPart) is recorded into the freshly-rotated session.
+-- Both inherit the same src; rested is split proportionally between the
+-- two without losing or gaining anything to rounding -- the new part
+-- takes whatever is left over.
+local function EmitCrossingEvent(paired)
+    local split = Ledger.SplitCrossingEvent(paired) -- pure logic: core/xp_delta.lua
+
+    local oldSession = CurrentSession()
+    if oldSession then
+        local offset = math.floor((paired.t - sessionStartRef) * 10 + 0.5)
+        Ledger.AddEvent(oldSession, offset, split.old.xp, paired.src, split.old.rested)
+    end
+
+    CloseCurrentLevel(paired.t)
+
+    -- offset 0: sessionStartRef was just rebound to paired.t in
+    -- OpenSession (inside CloseCurrentLevel).
+    local newSession = CurrentSession()
+    if newSession then
+        Ledger.AddEvent(newSession, 0, split.new.xp, paired.src, split.new.rested)
+        Ledger.ExtendXPBar()
+    end
+end
+
+-- Records the event and, if the source carried its own amount
+-- (expectedXP: e.g. QUEST_TURNED_IN's arg2), cross-checks it against
+-- the real UnitXP delta -- which is always what gets recorded, the
+-- discrepancy is only a warning signal. Also feeds the reconciliation
+-- counter with what has actually ended up recorded (see
+-- PLAYER_XP_UPDATE for the expected side) -- once, with the FULL xp,
+-- whether it crosses a level or not: splitting it into two entries
+-- (EmitCrossingEvent) is only a detail of where it gets recorded, it
+-- doesn't change how much gets recorded.
+local function EmitEvent(paired)
+    if paired.expectedXP and paired.expectedXP ~= paired.xp then
+        Ledger.Log("error", string.format(
+            "xp discrepancy: source %s reported %d, real UnitXP delta was %d -- recording the delta (UnitXP wins)",
+            paired.src, paired.expectedXP, paired.xp))
+    end
+
+    Ledger.AccountRecordedXP(reconciler, paired.xp)
+
+    if paired.crossing then
+        EmitCrossingEvent(paired)
+        return
+    end
+
+    local session = CurrentSession()
+    if not session then return end
+    local offset = math.floor((paired.t - sessionStartRef) * 10 + 0.5) -- tenths of a second, rounded
+    Ledger.AddEvent(session, offset, paired.xp, paired.src, paired.rested)
+    Ledger.ExtendXPBar()
+end
+
+-- Binds `sessions` to LedgerCharDB.sessions (guaranteed by
+-- Ledger.InitCharDB on ADDON_LOADED, which runs before this event can
+-- fire). If there were already unclosed sessions from a previous play
+-- session of the same level, it keeps writing into them (rebinding
+-- sessionStartRef to the last recorded offset, so the next event
+-- continues the count instead of resetting it); if there were none, it
+-- opens the first one and stores `initialXP` on it (the xp the player
+-- already had on this level before the addon started tracking, UnitXP
+-- at this instant) and `reached` (approximate: the instant tracking
+-- started, not the real ding -- that already happened before installing
+-- the addon, just as inexact as initialXP) -- and snapshots the
+-- character's total played time as the baseline for this level (see
+-- CloseCurrentLevel).
+local function StartTracking(t, level)
+    sessions = LedgerCharDB.sessions
+    if #sessions == 0 then
+        local session = OpenSession(t, level, false)
+        session.initialXP = UnitXP("player")
+        session.reached   = time()
+        LedgerCharDB.levelStartTotalPlayed = LedgerCharDB.lastKnownTotalTimePlayed or 0
+    else
+        local lastOffset = Ledger.LastOffset(CurrentSession()) or 0
+        sessionStartRef = t - (lastOffset / 10)
+    end
+    timeTracker = Ledger.NewTracker(t, "idle")
+    -- Rebinds the tracker to the current session's ALREADY PERSISTED
+    -- buckets (the same table, not a copy): any future AddSample writes
+    -- directly into the session (the SavedVariable), with no separate
+    -- save step -- same as sessions/session.e. If the session is new its
+    -- buckets already start at zero (Ledger.NewSession); if it's resumed
+    -- after a /reload, it picks up where it left off.
+    timeTracker.buckets = CurrentSession().buckets
+    Ledger.timeTracker = timeTracker -- exposed for ui/time_bar.lua
+    matcher     = Ledger.NewMatcher()
+    reconciler  = Ledger.NewReconciler()
+end
+
+-- Completely wipes LedgerCharDB (all of this character's saved
+-- sessions and levels) and starts tracking from scratch, without
+-- needing a /reload: empties sessions/levels, rebinds `sessions` to the
+-- new table (StartTracking) and opens the current level's first
+-- session with initialXP = current xp (same as a brand-new character).
+-- Also resets matcher/tracker/reconciler (via StartTracking) and the
+-- previousXP/previousMaxXP/previousLevel reference so the first
+-- PLAYER_XP_UPDATE after the wipe doesn't compute a fake delta.
+-- Irreversible action: meant for /ldg wipe confirm.
 function Ledger.WipeCharacterData(t)
     LedgerCharDB.levels   = {}
     LedgerCharDB.sessions = {}
+    LedgerCharDB.lastKnownTotalTimePlayed = 0
+    LedgerCharDB.levelStartTotalPlayed    = 0
     sessions = nil
     StartTracking(t, UnitLevel("player"))
     previousXP    = UnitXP("player")
     previousMaxXP = UnitXPMax("player")
     previousLevel = UnitLevel("player")
+    RequestTimePlayed()
     Ledger.RedrawXPBarFull()
 end
 
--- Cierra la sesion activa (tEnd) y abre una nueva marcada como manual.
--- Cierra, nunca borra: la sesion cerrada se queda en `sessions` hasta el
--- cierre de nivel. Tambien cierra el tramo de tiempo pendiente en la
--- sesion vieja y reengancha el tracker a los buckets (a cero) de la
--- nueva: cada sesion lleva su propio reparto de tiempo, que
--- core/level_close.lua suma con las demas del nivel al cerrarlo.
+-- Closes the active session (tEnd) and opens a new one marked as
+-- manual. Closes, never deletes: the closed session stays in `sessions`
+-- until the level closes. Also closes the pending time stretch on the
+-- old session and rebinds the tracker to the new one's (zeroed)
+-- buckets: each session carries its own time split, which
+-- core/level_close.lua sums with the rest of the level's on close. tEnd
+-- is stored as absolute time(), same as t0 (see OpenSession).
 function Ledger.ResetSession(t)
     local current = CurrentSession()
     if not current then return end
-    current.tEnd = t
-    local newSession = OpenSession(t, current.nivel, true)
+    current.tEnd = time()
+    local newSession = OpenSession(t, current.level, true)
     if timeTracker then
         Ledger.AddSample(timeTracker, t, timeTracker.lastState)
         timeTracker.buckets = newSession.buckets
@@ -291,12 +336,12 @@ function Ledger.ResetSession(t)
 end
 
 ----------------------------------------------------------------------
--- Vaciado periodico del buffer: combate, exploracion y mision tienen
--- todos una fuente propia hoy (CHAT_MSG_COMBAT_XP_GAIN clasificado, o
--- QUEST_TURNED_IN), asi que una cantidad solo debería acabar aqui con
--- src="unknown" si el mensaje/evento correspondiente se pierde del
--- todo (p.ej. saturacion de eventos). Sigue haciendo falta este
--- vaciado periodico para no esperar esa fuente para siempre.
+-- Periodic buffer flush: combat, exploration and quests all have a
+-- source of their own today (CHAT_MSG_COMBAT_XP_GAIN classified, or
+-- QUEST_TURNED_IN), so an amount should only end up here with
+-- src="unknown" if the corresponding message/event is lost entirely
+-- (e.g. event saturation). This periodic flush is still needed so we
+-- don't wait for that source forever.
 ----------------------------------------------------------------------
 
 local function FlushMatcher()
@@ -309,17 +354,17 @@ end
 C_Timer.NewTicker(1, FlushMatcher)
 
 ----------------------------------------------------------------------
--- Ticker de 1s para los buckets de tiempo: comprueba si hace falta
--- cerrar el tramo "active" en curso (el reloj de inactividad -- tiempo
--- desde la ultima ganancia de xp o la ultima entrada en combate, lo que
--- sea mas reciente -- ha superado el umbral) y redibuja la barra de
--- tiempo. Se llama a AddSample solo en esa transicion real, nunca en
--- cada tick: si se resampleara "active" cada segundo mientras siguiera
--- por debajo del umbral, cada gap entre muestras seria de ~1s y la
--- reclasificacion retroactiva (core/time_buckets.lua) nunca llegaria a
--- ver un hueco largo de una vez. La barra en si se redibuja cada
--- segundo igualmente, usando Ledger.PreviewBuckets (sin mutar el
--- tracker) para que se vea crecer en vivo aunque no haya transicion.
+-- 1s ticker for the time buckets: checks whether the ongoing "active"
+-- stretch needs to be closed (the inactivity clock -- time since the
+-- last xp gain or the last combat entry, whichever is more recent --
+-- has gone past the threshold) and redraws the time bar. AddSample is
+-- only called on that real transition, never on every tick: if
+-- "active" were resampled every second while still below the
+-- threshold, every gap between samples would be ~1s and the retroactive
+-- reclassification (core/time_buckets.lua) would never get to see a
+-- long gap at once. The bar itself is redrawn every second regardless,
+-- using Ledger.PreviewBuckets (without mutating the tracker) so it
+-- appears to grow live even without a real transition.
 ----------------------------------------------------------------------
 
 local function TickTimeState()
@@ -328,12 +373,12 @@ local function TickTimeState()
 
     local lastActivity = math.max(lastXPGainTime or 0, lastCombatEnterTime or 0)
     if Ledger.ShouldTransitionToTravel(timeTracker, now, lastActivity) then
-        -- Directo a "travel", no a "idle": todo el hueco de inactividad
-        -- (desde la ultima actividad real hasta ahora) se cuenta como
-        -- desplazamiento de una vez, sin partirlo segun el instante
-        -- exacto en que dispare este ticker.
+        -- Straight to "travel", not "idle": the whole inactivity gap
+        -- (from the last real activity until now) counts as travel at
+        -- once, without splitting it depending on the exact instant
+        -- this ticker happens to fire.
         Ledger.Log("trace", string.format(
-            "TimeBuckets: %.0fs sin actividad -- transicion active->travel", now - lastActivity))
+            "TimeBuckets: %.0fs without activity -- transitioning active->travel", now - lastActivity))
         Ledger.AddSample(timeTracker, now, "travel")
     end
 
@@ -343,7 +388,7 @@ end
 C_Timer.NewTicker(1, TickTimeState)
 
 ----------------------------------------------------------------------
--- Eventos
+-- Events
 ----------------------------------------------------------------------
 
 local ev = CreateFrame("Frame")
@@ -359,24 +404,11 @@ ev:RegisterEvent("TIME_PLAYED_MSG")
 ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
     local t = GetTime()
 
-    -- Si hay una subida de nivel pendiente de cerrar, la consume el
-    -- primer evento de xp que llegue (de cualquiera de los tres tipos:
-    -- no solo PLAYER_XP_UPDATE, porque CHAT_MSG_COMBAT_XP_GAIN o
-    -- QUEST_TURNED_IN podrian llegar antes y tocar el matcher/sesion
-    -- viejos si no se cierra antes). Si no llega ninguno a tiempo, la
-    -- consume Ledger.PENDING_LEVEL_UP_TIMEOUT despues el temporizador
-    -- de respaldo (ver ProcessPendingLevelUp).
-    if pendingLevelUp and (event == "PLAYER_XP_UPDATE"
-        or event == "CHAT_MSG_COMBAT_XP_GAIN"
-        or event == "QUEST_TURNED_IN") then
-        ProcessPendingLevelUp(t, event)
-    end
-
     if event == "PLAYER_ENTERING_WORLD" then
-        -- Login y cada pantalla de carga. Si no hay sesion todavia la
-        -- arrancamos aqui; si ya la habia, solo resincronizamos la xp de
-        -- referencia (y su maximo/nivel) para que la primera comparacion
-        -- tras la carga no calcule un delta falso.
+        -- Login and every loading screen. If there's no session yet we
+        -- start it here; if there already was one, we just resync the
+        -- reference xp (and its max/level) so the first comparison
+        -- after loading doesn't compute a fake delta.
         if not sessions then
             StartTracking(t, UnitLevel("player"))
         end
@@ -393,30 +425,30 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         local result = Ledger.ComputeXPDelta(previousXP, currentXP, previousMaxXP, previousLevel, currentLevel)
 
         Ledger.Log("trace", string.format(
-            "PLAYER_XP_UPDATE t=%.3f xpAnterior=%s xpActual=%d maxAnteriorCacheado=%s nivelAnterior=%s nivelActual=%d delta=%s",
+            "PLAYER_XP_UPDATE t=%.3f previousXP=%s currentXP=%d previousMaxCached=%s previousLevel=%s currentLevel=%d delta=%s",
             t, tostring(previousXP), currentXP, tostring(previousMaxXP), tostring(previousLevel), currentLevel,
             result.ok and tostring(result.delta) or "?"))
 
         if result.ok then
             if result.levelsGained == 1 then
                 Ledger.Log("info", string.format(
-                    "PLAYER_XP_UPDATE t=%.3f subida de nivel: xp reconstruida = %d (maximo cacheado del nivel viejo = %d)",
+                    "PLAYER_XP_UPDATE t=%.3f level up: reconstructed xp = %d (old level's cached max = %d)",
                     t, result.delta, previousMaxXP))
             end
 
-            -- delta = 0 es valido (p.ej. un PLAYER_XP_UPDATE sin cambio
-            -- real): se ignora sin loguearlo como error.
+            -- delta = 0 is valid (e.g. a PLAYER_XP_UPDATE with no real
+            -- change): ignored without logging it as an error.
             if result.delta ~= 0 then
-                -- Ganancia de xp real: marca "active" ahora mismo (cierra
-                -- lo que hubiera antes -- idle/travel -- y reinicia el
-                -- reloj de inactividad de los buckets de tiempo).
+                -- Real xp gain: marks "active" right now (closes
+                -- whatever was before -- idle/travel -- and resets the
+                -- time buckets' inactivity clock).
                 lastXPGainTime = t
                 if timeTracker then
                     Ledger.AddSample(timeTracker, t, "active")
                 end
 
                 Ledger.AccountExpectedXP(reconciler, result.delta)
-                local paired = Ledger.AddAmount(matcher, t, result.delta, Ledger.Log)
+                local paired = Ledger.AddAmount(matcher, t, result.delta, Ledger.Log, result.crossing)
                 if paired then EmitEvent(paired) end
             end
         else
@@ -432,63 +464,42 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         if paired then EmitEvent(paired) end
 
     elseif event == "QUEST_TURNED_IN" then
-        -- arg1 = questID, arg2 = xp otorgada, arg3 = dinero otorgado.
-        -- Se encola como fuente igual que un mensaje de combate (nunca
-        -- solo se loguea): el mensaje de entrega de mision es identico
-        -- al de exploracion ("You gain N experience."), asi que sin
-        -- encolar QUEST_TURNED_IN como fuente propia no hay forma de
-        -- distinguir uno de otro (ver SOURCE_PRIORITY en
-        -- core/xp_gain_matcher.lua). arg2 se pasa como expectedXP para
-        -- que EmitEvent haga la verificacion cruzada contra el delta
-        -- real; la cantidad grabada sigue siendo siempre la del delta.
+        -- arg1 = questID, arg2 = xp awarded, arg3 = money awarded.
+        -- Queued as a source just like a combat message (never just
+        -- logged): the quest-turn-in message is identical to the
+        -- exploration one ("You gain N experience."), so without
+        -- queuing QUEST_TURNED_IN as its own source there's no way to
+        -- tell one from the other (see SOURCE_PRIORITY in
+        -- core/xp_gain_matcher.lua). arg2 is passed as expectedXP so
+        -- EmitEvent can do the cross-check against the real delta; the
+        -- amount recorded is always still the delta's.
         local questID, questXP, questMoney = arg1, arg2, arg3
         Ledger.Log("trace", string.format(
-            "QUEST_TURNED_IN t=%.3f questID=%s xp=%s dinero=%s",
+            "QUEST_TURNED_IN t=%.3f questID=%s xp=%s money=%s",
             t, tostring(questID), tostring(questXP), tostring(questMoney)))
         local paired = Ledger.AddSource(matcher, t, "quest", Ledger.Log, 0, questXP)
         if paired then EmitEvent(paired) end
 
     elseif event == "PLAYER_LEVEL_UP" then
-        -- Diagnostico de orden de llegada respecto a PLAYER_XP_UPDATE:
-        -- arg1 es el nivel nuevo que reporta el propio evento;
-        -- UnitLevel("player") es lo que la API dice AHORA MISMO -- si
-        -- no coinciden, UnitLevel todavia no se ha actualizado en este
-        -- instante. previousLevel es lo que este addon tenia cacheado
-        -- del ultimo PLAYER_XP_UPDATE procesado (= el nivel que hay que
-        -- cerrar).
+        -- Diagnostics and panel refresh only: the real level close is
+        -- triggered by the xp event that crosses the ding itself, as
+        -- soon as it pairs with its source (Ledger.ComputeXPDelta
+        -- detects the crossing by looking at UnitLevel() on every
+        -- PLAYER_XP_UPDATE, without depending on this event arriving in
+        -- any particular order -- see EmitCrossingEvent). arg1 is the
+        -- new level reported by the event itself; UnitLevel("player") is
+        -- what the API says RIGHT NOW -- if they don't match, UnitLevel
+        -- hasn't updated yet at this instant.
         Ledger.Log("trace", string.format(
-            "PLAYER_LEVEL_UP t=%.3f nivelNuevo(arg1)=%s UnitLevel=%s previousLevel_cacheado=%s",
+            "PLAYER_LEVEL_UP t=%.3f newLevel(arg1)=%s UnitLevel=%s cached previousLevel=%s",
             t, tostring(arg1), tostring(UnitLevel("player")), tostring(previousLevel)))
         Ledger.UpdateXP()
 
-        if pendingLevelUp then
-            -- Dos PLAYER_LEVEL_UP muy seguidos sin que se haya
-            -- procesado el primero (doble ding). Caso limite: se fuerza
-            -- el cierre del primero ya, con el nivel que tenia
-            -- capturado, antes de marcar el segundo.
-            Ledger.Log("error", "PLAYER_LEVEL_UP con una subida ya pendiente sin procesar -- se fuerza su cierre antes de marcar la nueva")
-            ProcessPendingLevelUp(t, "PLAYER_LEVEL_UP duplicado")
-        end
-
-        if previousLevel then
-            pendingLevelUp = { oldLevel = previousLevel }
-            Ledger.Log("trace", string.format(
-                "CierreNivel: subida pendiente marcada (nivel viejo=%d), esperando un evento de xp o %.0fms",
-                previousLevel, Ledger.PENDING_LEVEL_UP_TIMEOUT * 1000))
-            pendingLevelUp.timer = C_Timer.NewTimer(Ledger.PENDING_LEVEL_UP_TIMEOUT, function()
-                Ledger.Log("trace", "CierreNivel: temporizador disparado, ningun evento de xp llego a tiempo")
-                ProcessPendingLevelUp(GetTime(), "temporizador")
-            end)
-        else
-            Ledger.Log("error", "PLAYER_LEVEL_UP sin previousLevel cacheado todavia -- no se puede saber que nivel cerrar")
-        end
-
     elseif event == "PLAYER_REGEN_DISABLED" then
-        -- Entrada en combate: marca "active" ya mismo. Nunca se usa
-        -- PLAYER_REGEN_ENABLED (salir de combate) como señal de nada --
-        -- se sale de combate constantemente entre pull y pull, y eso no
-        -- significa dejar de estar "activo" para el reloj de
-        -- inactividad.
+        -- Entering combat: marks "active" right away. PLAYER_REGEN_ENABLED
+        -- (leaving combat) is never used as a signal for anything --
+        -- you leave combat constantly between pulls, and that doesn't
+        -- mean you've stopped being "active" for the inactivity clock.
         lastCombatEnterTime = t
         if timeTracker then
             Ledger.AddSample(timeTracker, t, "active")
@@ -498,6 +509,13 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         if timeTracker then
             Ledger.AddSample(timeTracker, t, "dead")
         end
+        -- Level death counter, separate from the "dead" time bucket
+        -- (how long you were dead doesn't say how many times): see
+        -- core/level_close.lua, entry.deaths.
+        local session = CurrentSession()
+        if session then
+            session.deaths = (session.deaths or 0) + 1
+        end
 
     elseif event == "PLAYER_UNGHOST" then
         if timeTracker then
@@ -505,10 +523,12 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         end
 
     elseif event == "TIME_PLAYED_MSG" then
-        -- arg1 = tiempo total, arg2 = tiempo jugado en el nivel actual.
-        local session = CurrentSession()
-        if session then
-            session.levelTimePlayed = arg2
-        end
+        -- arg1 = the CHARACTER's total played time, arg2 = time played
+        -- on the current level (according to the client itself; not
+        -- used because it knows nothing about how this addon splits
+        -- levels). arg1 is the baseline for totalPlayed: see
+        -- CloseCurrentLevel and StartTracking, which subtract
+        -- LedgerCharDB.levelStartTotalPlayed from this value.
+        LedgerCharDB.lastKnownTotalTimePlayed = arg1
     end
 end)

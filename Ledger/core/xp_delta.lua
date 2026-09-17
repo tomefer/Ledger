@@ -1,32 +1,32 @@
 -- Ledger - core/xp_delta.lua
--- Calcula cuanta xp se ha ganado entre dos lecturas de UnitXP, sabiendo
--- que UnitXP se reinicia a un valor pequeño al subir de nivel (por lo
--- que xpActual < xpAnterior no significa que se haya perdido xp, sino
--- que el evento cruza un ding). Logica pura: no usa ninguna API de WoW,
--- todo se recibe como parametro. Quien llama debe cachear
--- UnitXPMax("player") en cada PLAYER_XP_UPDATE (nunca leerlo en el
--- instante del salto: para entonces ya devuelve el maximo del nivel
--- nuevo, no el del viejo que hace falta para completar la cuenta).
+-- Computes how much xp was gained between two UnitXP readings, knowing
+-- that UnitXP resets to a small value on level-up (so currentXP <
+-- previousXP doesn't mean xp was lost, it means the event crosses a
+-- ding). Pure logic: does not use any WoW API, everything is received
+-- as a parameter. The caller must cache UnitXPMax("player") on every
+-- PLAYER_XP_UPDATE (never read it at the instant of the jump: by then
+-- it already returns the new level's max, not the old one needed to
+-- complete the count).
 
 local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/xp_delta.lua")
 
--- Calcula el delta entre dos muestras:
---   previousXP, currentXP       -- UnitXP("player") antes/despues
---   previousMaxXP               -- UnitXPMax("player") CACHEADO en la
---                                   muestra anterior (el del nivel viejo)
---   previousLevel, currentLevel -- UnitLevel("player") antes/despues
+-- Computes the delta between two readings:
+--   previousXP, currentXP       -- UnitXP("player") before/after
+--   previousMaxXP               -- UnitXPMax("player") CACHED at the
+--                                   previous reading (the old level's)
+--   previousLevel, currentLevel -- UnitLevel("player") before/after
 --
--- Devuelve una tabla:
+-- Returns a table:
 --   { ok = true,  delta = N, levelsGained = 0|1 }
---   { ok = false, levelsGained = N, reason = "..." }  -- N niveles o mas
---     de golpe (no hay API en Classic Era para el requisito de xp de
---     niveles intermedios: no se inventa un numero) o xp menor sin
---     subida de nivel (caso sin explicacion valida).
+--   { ok = false, levelsGained = N, reason = "..." }  -- N levels or
+--     more at once (no Classic Era API exists for the xp requirement
+--     of intermediate levels: no number is invented) or lower xp with
+--     no level-up (a case with no valid explanation).
 --
--- previousXP/previousLevel a nil (primer evento, sin muestra anterior)
--- se tratan como si no hubiera pasado nada: delta 0, sin nivel ganado.
+-- previousXP/previousLevel being nil (first event, no previous
+-- reading) is treated as if nothing happened: delta 0, no level gained.
 function Ledger.ComputeXPDelta(previousXP, currentXP, previousMaxXP, previousLevel, currentLevel)
     previousXP = previousXP or currentXP
     previousLevel = previousLevel or currentLevel
@@ -38,7 +38,7 @@ function Ledger.ComputeXPDelta(previousXP, currentXP, previousMaxXP, previousLev
                 ok = false,
                 levelsGained = 0,
                 reason = string.format(
-                    "xpActual (%d) menor que xpAnterior (%d) sin subida de nivel detectada: caso sin explicacion valida, delta no calculado",
+                    "currentXP (%d) is lower than previousXP (%d) with no level-up detected: case with no valid explanation, delta not computed",
                     currentXP, previousXP),
             }
         end
@@ -46,16 +46,61 @@ function Ledger.ComputeXPDelta(previousXP, currentXP, previousMaxXP, previousLev
     end
 
     if levelsGained == 1 then
-        -- La xp que faltaba para completar el nivel viejo (con su
-        -- maximo cacheado) mas la xp ya ganada en el nivel nuevo.
-        return { ok = true, delta = (previousMaxXP - previousXP) + currentXP, levelsGained = 1 }
+        -- The xp that was missing to complete the old level (with its
+        -- cached max) plus the xp already gained in the new level.
+        -- Both parts are exposed separately (crossing.oldPart/newPart,
+        -- which sum exactly to delta) so whoever records them can
+        -- split the event into two entries -- one that closes the old
+        -- level, another that opens the new one -- instead of
+        -- attributing the whole gain to just one of the two levels.
+        local oldPart = previousMaxXP - previousXP
+        local newPart = currentXP
+        return {
+            ok = true,
+            delta = oldPart + newPart,
+            levelsGained = 1,
+            crossing = {
+                oldPart  = oldPart,
+                newPart  = newPart,
+                oldLevel = previousLevel,
+                newLevel = currentLevel,
+            },
+        }
     end
 
     return {
         ok = false,
         levelsGained = levelsGained,
         reason = string.format(
-            "salto de %d niveles en un solo PLAYER_XP_UPDATE: no hay API en Classic Era para el requisito de xp de niveles intermedios, delta no calculable",
+            "jump of %d levels in a single PLAYER_XP_UPDATE: no Classic Era API exists for the xp requirement of intermediate levels, delta not computable",
             levelsGained),
+    }
+end
+
+-- An xp event already paired with its source (paired: {xp=, rested=,
+-- crossing={oldPart=,newPart=,...}}, see core/xp_gain_matcher.lua) may
+-- cross a ding: this function computes how to split it into two
+-- entries -- the one that completes the old level, the one that opens
+-- the new one -- that SUM EXACTLY to the original paired.xp and
+-- paired.rested, without losing or gaining anything to rounding.
+-- rested is split proportionally between the two parts (rounding the
+-- old one to the nearest integer); the new one always takes whatever
+-- is left over, it's never computed separately. Pure logic: does not
+-- use any WoW API and does not decide where each part gets recorded,
+-- only how much each one gets.
+function Ledger.SplitCrossingEvent(paired)
+    local crossing = paired.crossing
+    local oldPart, newPart = crossing.oldPart, crossing.newPart
+
+    local restedOld = 0
+    if paired.rested and paired.rested > 0 and paired.xp > 0 then
+        restedOld = math.floor(paired.rested * oldPart / paired.xp + 0.5)
+        if restedOld > oldPart then restedOld = oldPart end
+    end
+    local restedNew = (paired.rested or 0) - restedOld
+
+    return {
+        old = { xp = oldPart, rested = restedOld },
+        new = { xp = newPart, rested = restedNew },
     }
 end

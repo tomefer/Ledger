@@ -1,27 +1,26 @@
 -- Ledger - ui/time_bar.lua
--- Barra de reparto de tiempo del nivel actual: paralela a la barra de
--- composicion de xp (misma anchura y posicion horizontal, misma
--- altura, 2px de separacion por encima), con los 4 buckets de
--- core/time_buckets.lua en orden fijo (active, travel, idle, dead). Eje
--- PROPORCIONAL: ocupa siempre el 100% del ancho, no es comparable
--- pixel a pixel con la barra de xp (ejes distintos). Capa fina: el
--- calculo de segmentos y el formateo del tooltip viven en core/, aqui
--- solo se pinta con texturas reutilizables (una fija por bucket: son
--- siempre los mismos 4, en el mismo orden, a diferencia de la barra de
--- xp no hace falta un pool dinamico).
+-- Current level's time-split bar: parallel to the xp composition bar
+-- (same width and horizontal position, same height, 2px gap above it),
+-- with the 4 core/time_buckets.lua buckets in a fixed order (active,
+-- travel, idle, dead). PROPORTIONAL axis: always occupies 100% of the
+-- width, not comparable pixel-to-pixel with the xp bar (different
+-- axes). Thin layer: segment computation and tooltip formatting live in
+-- core/, this file only paints with reusable textures (one fixed per
+-- bucket: they're always the same 4, in the same order, so unlike the
+-- xp bar there's no need for a dynamic pool).
 
 local ADDON_NAME, Ledger = ...
 
 local PALETTE = Ledger.PALETTE
-local WHITE_TEXTURE = "Interface\\Buttons\\WHITE8x8" -- ver ui/xp_bar.lua: SetTexture con numeros no pinta color en este cliente
+local WHITE_TEXTURE = "Interface\\Buttons\\WHITE8x8" -- see ui/xp_bar.lua: SetTexture with numbers doesn't paint a color in this client
 
 local frame = CreateFrame("Frame", "LedgerTimeBar", UIParent)
 frame:Hide()
 Ledger.timeBarFrame = frame
 
 ----------------------------------------------------------------------
--- Una textura fija por bucket (nunca un pool: siempre son los mismos 4,
--- en Ledger.TIME_BUCKET_ORDER) + borde, igual que la barra de xp.
+-- One fixed texture per bucket (never a pool: they're always the same
+-- 4, in Ledger.TIME_BUCKET_ORDER) + border, same as the xp bar.
 ----------------------------------------------------------------------
 
 local bucketTextures = {}
@@ -31,7 +30,7 @@ for _, bucket in ipairs(Ledger.TIME_BUCKET_ORDER) do
     bucketTextures[bucket] = tex
 end
 
-local BORDER_COLOR = { 0, 0, 0, 0.6 } -- negro al 60%, igual que la barra de xp
+local BORDER_COLOR = { 0, 0, 0, 0.6 } -- black at 60%, same as the xp bar
 
 local function CreateBorderPiece()
     local tex = frame:CreateTexture(nil, "OVERLAY")
@@ -67,10 +66,10 @@ local function LayoutBorder()
     borderRight:SetWidth(1)
 end
 
--- Ancla el frame paralelo a la barra de xp: mismo ancho y posicion
--- horizontal, misma altura, 2px de separacion por encima. Devuelve el
--- ancho, o nil si la barra de xp todavia no tiene un tamaño valido
--- (p.ej. no se ha anclado nunca a la barra nativa).
+-- Anchors the parallel frame to the xp bar: same width and horizontal
+-- position, same height, 2px gap above it. Returns the width, or nil if
+-- the xp bar doesn't have a valid size yet (e.g. it has never anchored
+-- to the native bar).
 local function AnchorToXPBar()
     local xpBar = Ledger.xpBarFrame
     local width = xpBar and xpBar:GetWidth()
@@ -102,10 +101,10 @@ local function PaintSegments(segments)
 end
 
 ----------------------------------------------------------------------
--- Datos: todas las sesiones del nivel actual (igual que la barra de
--- xp), con la sesion en curso usando la vista previa en vivo del
--- tracker (core/time_buckets.lua: Ledger.PreviewBuckets) para que la
--- barra se vea crecer cada segundo sin mutar nada.
+-- Data: all of the current level's sessions (same as the xp bar), with
+-- the in-progress session using the tracker's live preview
+-- (core/time_buckets.lua: Ledger.PreviewBuckets) so the bar appears to
+-- grow every second without mutating anything.
 ----------------------------------------------------------------------
 
 local function CurrentBuckets()
@@ -129,10 +128,10 @@ local function CurrentBuckets()
     return totals
 end
 
--- Redibujado: llamado desde el mismo ticker de 1s que alimenta los
--- buckets (ui/xp_capture.lua), nunca desde los eventos de xp -- los
--- tramos de viaje/inactividad/muerte no generan ninguno, y atarlo a las
--- kills dejaria la barra congelada la mayor parte del tiempo.
+-- Redraw: called from the same 1s ticker that feeds the buckets
+-- (ui/xp_capture.lua), never from xp events -- travel/idle/dead
+-- stretches don't generate any, and tying it to kills would leave the
+-- bar frozen most of the time.
 function Ledger.RedrawTimeBar()
     if not frame:IsShown() then return end
     local width = AnchorToXPBar()
@@ -160,15 +159,16 @@ function Ledger.ToggleTimeBar()
 end
 
 ----------------------------------------------------------------------
--- Tooltip: cada bucket con su tiempo absoluto y porcentaje
--- (core/time_bar.lua: Ledger.FormatTimeBarTooltip, funcion pura), cada
--- linea coloreada con la MISMA Ledger.PALETTE que pinta los segmentos.
+-- Tooltip: each bucket with its absolute time and percentage
+-- (core/time_bar.lua: Ledger.FormatTimeBarTooltip, a pure function),
+-- each line colored with the SAME Ledger.PALETTE that paints the
+-- segments.
 ----------------------------------------------------------------------
 
 frame:EnableMouse(true)
 frame:SetScript("OnEnter", function(self)
     GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:SetText("Reparto de tiempo del nivel", 1, 1, 1)
+    GameTooltip:SetText("Level time split", 1, 1, 1)
 
     for _, line in ipairs(Ledger.FormatTimeBarTooltip(CurrentBuckets())) do
         local color = PALETTE[line.bucket] or PALETTE._fallback

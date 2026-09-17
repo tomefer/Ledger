@@ -1,7 +1,7 @@
 -- Ledger - core/events.lua
--- Acumulador de ganancias de xp sobre la serie "xp" (ver core/series.lua)
--- de una sesion. Logica pura: no usa ninguna API de WoW. El offset se
--- recibe ya calculado (en decimas de segundo) por quien llama.
+-- Accumulator of xp gains over the "xp" series (see core/series.lua) of
+-- a session. Pure logic: does not use any WoW API. The offset is
+-- received already computed (in tenths of a second) by the caller.
 
 local ADDON_NAME, Ledger = ...
 
@@ -13,45 +13,52 @@ local SRC_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "src")
 local OFF_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "off")
 local RESTED_FIELD  = Ledger.SeriesFieldIndex(XP_SERIES, "rested")
 
--- Crea una sesion nueva. mode ("farm"|"quest"|"dungeon"|nil) es solo
--- informativo: nunca debe alterar el src de ningun evento. manual marca
--- las sesiones abiertas por /ldg reset; se comportan igual que las
--- demas. buckets (core/time_buckets.lua) empieza a cero: quien lleva la
--- cuenta en caliente (ui/xp_capture.lua) reengancha aqui su tracker en
--- vivo, para que el acumulado sobreviva a /reload igual que el resto de
--- la sesion.
-function Ledger.NewSession(t0, nivel, mode, manual)
+-- Creates a new session. mode ("farm"|"quest"|"dungeon"|nil) is purely
+-- informational: it must never alter any event's src. manual marks
+-- sessions opened by /ldg reset; they behave just like any other.
+-- buckets (core/time_buckets.lua) starts at zero: whoever keeps the
+-- live count (ui/xp_capture.lua) rebinds its live tracker here, so the
+-- accumulated total survives /reload just like the rest of the
+-- session. deaths (deaths in this session, separate from the "dead"
+-- time bucket) also starts at zero.
+function Ledger.NewSession(t0, level, mode, manual)
     return {
         t0      = t0,
-        nivel   = nivel,
+        level   = level,
         mode    = mode,
         manual  = manual or false,
+        deaths  = 0,
         buckets = Ledger.NewEmptyBuckets(),
         [XP_SERIES.key] = {},
     }
 end
 
--- Añade un evento al final del array plano de la serie xp. rested es la
--- parte de xp que vino del bono por descanso (0 por defecto si se
--- omite). Se recorta a rested = xp si llegara mayor que xp, para que la
--- xp base (xp - rested) nunca pueda salir negativa por un desajuste
--- entre la cantidad (delta de UnitXP) y el bono (extraido del mensaje
--- de chat): son dos señales independientes y no hay garantia externa
--- de que casen.
+-- Appends an event to the end of the xp series' flat array. src is the
+-- text name of the source ("kill", "quest", "explore", "unknown");
+-- it's translated here to the numeric ID from Ledger.SRC_IDS
+-- (core/series.lua) before storing -- this is the persistence boundary,
+-- everything else (matcher, chat_patterns, palette) keeps working with
+-- the name. rested is the part of xp that came from the rested bonus
+-- (0 by default if omitted). It's clamped to rested = xp if it would
+-- come in higher than xp, so the base xp (xp - rested) can never go
+-- negative from a mismatch between the amount (UnitXP delta) and the
+-- bonus (extracted from the chat message): they're two independent
+-- signals with no external guarantee that they'll agree.
 function Ledger.AddEvent(session, offset, xp, src, rested)
     rested = rested or 0
     if rested > xp then rested = xp end
-    Ledger.AppendRecord(session, XP_SERIES, offset, xp, src, rested)
+    local srcId = Ledger.SRC_IDS[src] or Ledger.SRC_IDS.unknown
+    Ledger.AppendRecord(session, XP_SERIES, offset, xp, srcId, rested)
 end
 
--- Numero de eventos registrados.
+-- Number of recorded events.
 function Ledger.EventCount(session)
     return Ledger.RecordCount(session, XP_SERIES)
 end
 
--- Xp "efectiva" de un evento segun el toggle includeRested: la xp total
--- tal cual si es true o se omite (por defecto), o sin el bono por
--- descanso (xp - rested) si es false. Nunca negativa: ver AddEvent.
+-- "Effective" xp of an event according to the includeRested toggle: the
+-- total xp as-is if true or omitted (default), or without the rested
+-- bonus (xp - rested) if false. Never negative: see AddEvent.
 function Ledger.EffectiveXP(xp, rested, includeRested)
     if includeRested == false then
         return xp - rested
@@ -59,8 +66,8 @@ function Ledger.EffectiveXP(xp, rested, includeRested)
     return xp
 end
 
--- Suma de xp de todos los eventos. includeRested (por defecto true)
--- decide si el bono por descanso cuenta en el total: ver EffectiveXP.
+-- Sum of xp across all events. includeRested (true by default) decides
+-- whether the rested bonus counts toward the total: see EffectiveXP.
 function Ledger.TotalXP(session, includeRested)
     local total = 0
     local arr = session[XP_SERIES.key]
@@ -74,9 +81,9 @@ function Ledger.TotalXP(session, includeRested)
     return total
 end
 
--- Suma del bono por descanso de todos los eventos (siempre el total
--- real acumulado, sin toggle: es precisamente lo que el toggle resta o
--- no del total de arriba).
+-- Sum of the rested bonus across all events (always the real
+-- accumulated total, no toggle: this is exactly what the toggle above
+-- does or doesn't subtract from the total).
 function Ledger.TotalRested(session)
     local total = 0
     local arr = session[XP_SERIES.key]
@@ -88,23 +95,26 @@ function Ledger.TotalRested(session)
     return total
 end
 
--- Xp acumulada por codigo de origen: { [src] = xpTotal, ... }
+-- Xp accumulated by source name: { [src] = xpTotal, ... }. Translates
+-- the persisted numeric ID (see AddEvent) back to the text name: this
+-- is the reading boundary, everything consuming this result (palette,
+-- tooltip, state_dump) expects the name.
 function Ledger.XPBySource(session)
     local bySource = {}
     local arr = session[XP_SERIES.key]
     if arr then
         for i = 1, #arr, XP_SERIES.stride do
             local xp  = arr[i + XP_FIELD - 1]
-            local src = arr[i + SRC_FIELD - 1]
+            local src = Ledger.SRC_NAMES[arr[i + SRC_FIELD - 1]] or "unknown"
             bySource[src] = (bySource[src] or 0) + xp
         end
     end
     return bySource
 end
 
--- Xp acumulada por origen, sumada a lo largo de varias sesiones (p.ej.
--- todas las del nivel en curso, no solo la activa). Sirve para el
--- tooltip de la barra de composicion de xp.
+-- Xp accumulated by source, summed across several sessions (e.g. all of
+-- the current level's, not just the active one). Feeds the xp
+-- composition bar's tooltip.
 function Ledger.XPBySourceAcrossSessions(sessions)
     local bySource = {}
     for _, session in ipairs(sessions) do
@@ -115,7 +125,7 @@ function Ledger.XPBySourceAcrossSessions(sessions)
     return bySource
 end
 
--- Offset del ultimo evento registrado, o nil si no hay ninguno.
+-- Offset of the last recorded event, or nil if there isn't one.
 function Ledger.LastOffset(session)
     local arr = session[XP_SERIES.key]
     if not arr or #arr == 0 then return nil end

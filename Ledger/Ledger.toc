@@ -1,6 +1,6 @@
 ## Interface: 11509
 ## Title: Ledger
-## Notes: Seguimiento de experiencia. Esqueleto mínimo.
+## Notes: Experience tracking. Minimal skeleton.
 ## Author: tomef
 ## Version: 0.1.0
 ## SavedVariables: LedgerDB

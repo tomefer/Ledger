@@ -1,17 +1,17 @@
 -- Ledger - core/level_close.lua
--- Cierra un nivel: agrega las sesiones que le pertenecen en la entrada de
--- `levels` del modelo de datos (totales, desglose por origen y curva de
--- xp por minuto). Logica pura: no usa ninguna API de WoW.
+-- Closes a level: aggregates the sessions that belong to it into the
+-- data model's `levels` entry (totals, breakdown by source and
+-- per-minute xp curve). Pure logic: does not use any WoW API.
 --
--- Las sesiones ya deben venir recortadas por quien llama a la del nivel
--- que corresponda: si una sesion real abarca dos niveles, se le pasan por
--- separado los dos trozos de su array de eventos, uno por cada cierre de
--- nivel. Esta funcion no detecta ni corta esos limites, solo agrega lo
--- que se le da.
+-- The sessions must already come pre-trimmed by the caller to the
+-- level they belong to: if a real session spans two levels, its events
+-- array is passed in as two separate pieces, one per level close. This
+-- function does not detect or cut those boundaries, it only aggregates
+-- what it's given.
 --
--- totalPlayed se recibe ya calculado (p.ej. sumando los buckets de
--- core/time_buckets.lua de las sesiones del nivel); esta funcion no lo
--- calcula.
+-- totalPlayed is received already computed (e.g. by summing the
+-- level's sessions' core/time_buckets.lua buckets); this function does
+-- not compute it.
 
 local ADDON_NAME, Ledger = ...
 
@@ -22,13 +22,13 @@ local OFF_FIELD    = Ledger.SeriesFieldIndex(XP_SERIES, "off")
 local XP_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "xp")
 local RESTED_FIELD = Ledger.SeriesFieldIndex(XP_SERIES, "rested")
 
--- offset esta en decimas de segundo; 1 minuto = 600 decimas.
+-- offset is in tenths of a second; 1 minute = 600 tenths.
 local TENTHS_PER_MINUTE = 600
 
--- Suma la xp efectiva (ver Ledger.EffectiveXP, respeta includeRested) de
--- cada evento de la sesion al minuto (relativo al t0 de esa sesion) al
--- que pertenece, acumulando en minuteXP. Devuelve el minuto mas alto
--- tocado, para poder densificar la curva despues.
+-- Adds the effective xp (see Ledger.EffectiveXP, respects includeRested)
+-- of each session event to the minute (relative to that session's t0)
+-- it belongs to, accumulating into minuteXP. Returns the highest minute
+-- touched, so the curve can be densified afterward.
 local function AddToCurve(minuteXP, session, includeRested)
     local arr = session[XP_SERIES.key]
     if not arr then return 0 end
@@ -47,13 +47,14 @@ local function AddToCurve(minuteXP, session, includeRested)
     return maxMinute
 end
 
--- includeRested (por defecto true) decide si el bono por descanso cuenta
--- en totalXP y en curve (ver Ledger.EffectiveXP); nunca afecta a
--- totalRested, que es siempre el acumulado real del bono, ni a
--- bySource, que sigue siendo el desglose de la xp total tal cual.
+-- includeRested (true by default) decides whether the rested bonus
+-- counts toward totalXP and curve (see Ledger.EffectiveXP); it never
+-- affects totalRested, which is always the real accumulated bonus, nor
+-- bySource, which stays the breakdown of the total xp as-is.
 function Ledger.CloseLevel(sessions, totalPlayed, includeRested)
     local totalXP     = 0
     local totalRested = 0
+    local deaths      = 0
     local bySource    = {}
     local minuteXP    = {}
     local maxMinute   = 0
@@ -62,6 +63,7 @@ function Ledger.CloseLevel(sessions, totalPlayed, includeRested)
     for _, session in ipairs(sessions) do
         totalXP     = totalXP + Ledger.TotalXP(session, includeRested)
         totalRested = totalRested + Ledger.TotalRested(session)
+        deaths      = deaths + (session.deaths or 0)
 
         for src, xp in pairs(Ledger.XPBySource(session)) do
             bySource[src] = (bySource[src] or 0) + xp
@@ -85,20 +87,25 @@ function Ledger.CloseLevel(sessions, totalPlayed, includeRested)
     end
 
     return {
-        nivel       = sessions[1].nivel,
+        level       = sessions[1].level,
+        reached     = sessions[1].reached or 0,
         totalXP     = totalXP,
         totalRested = totalRested,
         totalPlayed = totalPlayed,
+        deaths      = deaths,
         bySource    = bySource,
         curve       = curve,
         buckets     = buckets,
     }
 end
 
--- Registra en `db` (con la forma de LedgerCharDB) el resultado de cerrar
--- un nivel. Garantiza que db.levels existe en vez de asumirlo, para que
--- ningun llamador tenga que indexar esa clave a pelo.
+-- Records the result of closing a level into `db` (shaped like
+-- LedgerCharDB). Guarantees db.levels exists instead of assuming it,
+-- so no caller has to index that key raw. Indexed by the actual level
+-- number (entry.level), never by insertion order: if the addon is
+-- installed mid-game, levels[20] is level 20, not the first item in
+-- the list.
 function Ledger.RecordLevelClose(db, entry)
     db.levels = db.levels or {}
-    db.levels[entry.nivel] = entry
+    db.levels[entry.level] = entry
 end

@@ -18,7 +18,7 @@ describe("core/level_close.lua", function()
 
             local entry = Ledger.CloseLevel({ s }, 500)
 
-            assert.are.equal(10, entry.nivel)
+            assert.are.equal(10, entry.level)
             assert.are.equal(170, entry.totalXP)
             assert.are.equal(500, entry.totalPlayed)
             assert.are.same({ kill = 150, quest = 20 }, entry.bySource)
@@ -38,7 +38,7 @@ describe("core/level_close.lua", function()
 
             local entry = Ledger.CloseLevel({ a, b }, 900)
 
-            assert.are.equal(20, entry.nivel)
+            assert.are.equal(20, entry.level)
             assert.are.equal(43, entry.totalXP)
             assert.are.equal(900, entry.totalPlayed)
             assert.are.same({ kill = 30, quest = 13 }, entry.bySource)
@@ -64,12 +64,12 @@ describe("core/level_close.lua", function()
             local entry5 = Ledger.CloseLevel({ level5 }, 25)
             local entry6 = Ledger.CloseLevel({ level6 }, 90)
 
-            assert.are.equal(5, entry5.nivel)
+            assert.are.equal(5, entry5.level)
             assert.are.equal(121, entry5.totalXP)
             assert.are.same({ kill = 81, quest = 40 }, entry5.bySource)
             assert.are.same({ 121 }, entry5.curve)
 
-            assert.are.equal(6, entry6.nivel)
+            assert.are.equal(6, entry6.level)
             assert.are.equal(90, entry6.totalXP)
             assert.are.same({ kill = 60, quest = 30 }, entry6.bySource)
             assert.are.same({ 60, 30 }, entry6.curve)
@@ -146,7 +146,7 @@ describe("core/level_close.lua", function()
 
             local entry = Ledger.CloseLevel({ s }, 45)
 
-            assert.are.equal(42, entry.nivel)
+            assert.are.equal(42, entry.level)
             assert.are.equal(0, entry.totalXP)
             assert.are.equal(45, entry.totalPlayed)
             assert.are.same({}, entry.bySource)
@@ -180,10 +180,51 @@ describe("core/level_close.lua", function()
         end)
     end)
 
+    describe("deaths", function()
+        it("suma las muertes de todas las sesiones del nivel", function()
+            local a = Ledger.NewSession(0, 7)
+            a.deaths = 2
+            local b = Ledger.NewSession(5000, 7)
+            b.deaths = 1
+
+            local entry = Ledger.CloseLevel({ a, b }, 10)
+
+            assert.are.equal(3, entry.deaths)
+        end)
+
+        it("es 0 si ninguna sesion murio (deaths ya viene a 0 por NewSession)", function()
+            local s = Ledger.NewSession(0, 7)
+
+            local entry = Ledger.CloseLevel({ s }, 10)
+
+            assert.are.equal(0, entry.deaths)
+        end)
+    end)
+
+    describe("reached", function()
+        it("toma el reached de la primera sesion del nivel", function()
+            local a = Ledger.NewSession(0, 7)
+            a.reached = 1758000000
+            local b = Ledger.NewSession(5000, 7)
+
+            local entry = Ledger.CloseLevel({ a, b }, 10)
+
+            assert.are.equal(1758000000, entry.reached)
+        end)
+
+        it("es 0 si la sesion no trae reached (esquema viejo antes de migrar)", function()
+            local s = Ledger.NewSession(0, 7)
+
+            local entry = Ledger.CloseLevel({ s }, 10)
+
+            assert.are.equal(0, entry.reached)
+        end)
+    end)
+
     describe("RecordLevelClose", function()
         it("crea db.levels si no existe y escribe la entrada por nivel", function()
             local db = {}
-            local entry = { nivel = 7, totalXP = 300 }
+            local entry = { level = 7, totalXP = 300 }
 
             Ledger.RecordLevelClose(db, entry)
 
@@ -191,12 +232,12 @@ describe("core/level_close.lua", function()
         end)
 
         it("no pisa entradas de otros niveles ya guardadas", function()
-            local db = { levels = { [3] = { nivel = 3, totalXP = 10 } } }
-            local entry = { nivel = 4, totalXP = 20 }
+            local db = { levels = { [3] = { level = 3, totalXP = 10 } } }
+            local entry = { level = 4, totalXP = 20 }
 
             Ledger.RecordLevelClose(db, entry)
 
-            assert.are.same({ nivel = 3, totalXP = 10 }, db.levels[3])
+            assert.are.same({ level = 3, totalXP = 10 }, db.levels[3])
             assert.are.same(entry, db.levels[4])
         end)
     end)

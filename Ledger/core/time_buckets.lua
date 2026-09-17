@@ -1,31 +1,31 @@
 -- Ledger - core/time_buckets.lua
--- Acumula el tiempo transcurrido en los buckets active, idle, travel y
--- dead a partir de muestras de estado con marca de tiempo. Logica pura:
--- no usa ninguna API de WoW, el reloj se recibe siempre como parametro.
+-- Accumulates elapsed time into the active, idle, travel and dead
+-- buckets from timestamped state samples. Pure logic: does not use any
+-- WoW API, the clock is always received as a parameter.
 --
--- Reclasificacion retroactiva: si el jugador queda en "active" y pasan
--- `threshold` segundos o mas sin una nueva muestra de combate, todo ese
--- tramo se cuenta como "travel" en vez de "active" (no era combate, era
--- desplazamiento).
+-- Retroactive reclassification: if the player stays "active" and
+-- `threshold` seconds or more pass without a new combat sample, that
+-- whole stretch is counted as "travel" instead of "active" (it wasn't
+-- combat, it was travel).
 
 local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/time_buckets.lua")
 
--- Segundos sin combate a partir de los cuales un tramo "active" pasa a
--- contarse como "travel".
+-- Seconds without combat after which an "active" stretch starts
+-- counting as "travel".
 Ledger.INACTIVITY_THRESHOLD = 30
 
--- Forma comun de un juego de buckets vacio, para no repetir el literal
--- en core/events.lua (session.buckets), core/level_close.lua (agregado
--- de la entrada de levels) y core/xp.lua (migracion).
+-- Common shape of an empty set of buckets, to avoid repeating the
+-- literal in core/events.lua (session.buckets), core/level_close.lua
+-- (the levels entry's aggregate) and core/xp.lua (migration).
 function Ledger.NewEmptyBuckets()
     return { active = 0, idle = 0, travel = 0, dead = 0 }
 end
 
--- Crea un tracker. state es el estado vigente a partir de t0: "active",
--- "idle", "travel" o "dead". threshold es opcional (por defecto
--- Ledger.INACTIVITY_THRESHOLD).
+-- Creates a tracker. state is the state in effect starting at t0:
+-- "active", "idle", "travel" or "dead". threshold is optional (defaults
+-- to Ledger.INACTIVITY_THRESHOLD).
 function Ledger.NewTracker(t0, state, threshold)
     return {
         buckets   = Ledger.NewEmptyBuckets(),
@@ -35,11 +35,11 @@ function Ledger.NewTracker(t0, state, threshold)
     }
 end
 
--- A que bucket va un tramo de `elapsed` segundos que estaba en `state`:
--- el mismo, salvo que fuera "active" y el tramo alcance el umbral, en
--- cuyo caso se reclasifica entero como "travel" (reclasificacion
--- retroactiva). Compartido por AddSample (que si muta el tracker) y
--- PreviewBuckets (que no).
+-- Which bucket a stretch of `elapsed` seconds that was in `state` goes
+-- to: the same one, unless it was "active" and the stretch reaches the
+-- threshold, in which case it's reclassified entirely as "travel"
+-- (retroactive reclassification). Shared by AddSample (which does
+-- mutate the tracker) and PreviewBuckets (which doesn't).
 local function ClassifyElapsed(state, elapsed, threshold)
     if state == "active" and elapsed >= threshold then
         return "travel"
@@ -47,9 +47,9 @@ local function ClassifyElapsed(state, elapsed, threshold)
     return state
 end
 
--- Registra que a partir del instante t el estado pasa a ser `state`.
--- Cierra el tramo anterior [lastT, t) y lo suma al bucket que le
--- corresponde, aplicando la reclasificacion retroactiva si procede.
+-- Records that starting at instant t the state becomes `state`. Closes
+-- the previous stretch [lastT, t) and adds it to the bucket it
+-- belongs to, applying the retroactive reclassification if it applies.
 function Ledger.AddSample(tracker, t, state)
     local elapsed = t - tracker.lastT
     if elapsed > 0 then
@@ -60,15 +60,15 @@ function Ledger.AddSample(tracker, t, state)
     tracker.lastState = state
 end
 
--- Vista previa "a fecha de now" de los buckets, SIN mutar el tracker:
--- una copia de tracker.buckets con el tramo abierto [lastT, now) ya
--- sumado al bucket que le correspondería si se cerrara ahora mismo
--- (misma reclasificacion retroactiva que AddSample). Sirve para que una
--- barra en pantalla se vea crecer cada segundo sin tener que cerrar de
--- verdad el tramo en cada redibujado -- eso rompería la
--- reclasificacion retroactiva, que necesita ver el hueco completo de
--- una vez (ver core/xp_capture.lua: el ticker de 1s solo llama a
--- AddSample en las transiciones de verdad, nunca en cada tick).
+-- "As of now" preview of the buckets, WITHOUT mutating the tracker: a
+-- copy of tracker.buckets with the open stretch [lastT, now) already
+-- added to the bucket it would belong to if closed right now (same
+-- retroactive reclassification as AddSample). Lets an on-screen bar
+-- appear to grow every second without actually closing the stretch on
+-- every redraw -- that would break the retroactive reclassification,
+-- which needs to see the whole gap at once (see core/xp_capture.lua:
+-- the 1s ticker only calls AddSample on real transitions, never on
+-- every tick).
 function Ledger.PreviewBuckets(tracker, now)
     local preview = {
         active = tracker.buckets.active,
@@ -84,18 +84,18 @@ function Ledger.PreviewBuckets(tracker, now)
     return preview
 end
 
--- Decide si hace falta cerrar el tramo "active" en curso porque el
--- reloj de inactividad (tiempo desde la ultima señal de actividad:
--- ganancia de xp o entrada en combate, lo que sea mas reciente) ha
--- superado el umbral del tracker. Logica pura: no muta nada, no toca
--- GetTime ni ninguna API de WoW -- todo se recibe como parametro. Si es
--- true, quien llama debe cerrar el tramo con
--- Ledger.AddSample(tracker, now, "travel") -- directo a travel, no a
--- idle: todo el hueco de inactividad se cuenta como desplazamiento
--- hasta la siguiente actividad real, sin partirlo en dos buckets segun
--- el instante exacto en que dispare el ticker (ver "idle" mas abajo,
--- que es un estado aparte para cuando se sabe que NO se esta viajando,
--- p.ej. justo despues de resucitar).
+-- Decides whether the ongoing "active" stretch needs to be closed
+-- because the inactivity clock (time since the last real activity
+-- signal: an xp gain or entering combat, whichever is more recent) has
+-- gone past the tracker's threshold. Pure logic: mutates nothing,
+-- doesn't touch GetTime or any WoW API -- everything is received as a
+-- parameter. If true, the caller must close the stretch with
+-- Ledger.AddSample(tracker, now, "travel") -- straight to travel, not
+-- idle: the whole inactivity gap counts as travel until the next real
+-- activity, without splitting it into two buckets depending on the
+-- exact instant this ticker happens to fire (see "idle" below, which is
+-- a separate state for when it's known that travel is NOT happening,
+-- e.g. right after resurrecting).
 function Ledger.ShouldTransitionToTravel(tracker, now, lastActivityTime)
     return tracker.lastState == "active" and (now - lastActivityTime) >= tracker.threshold
 end

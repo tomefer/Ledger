@@ -50,6 +50,65 @@ describe("core/xp_delta.lua", function()
 
             assert.are.equal((2400 - 500) + 20, r.delta)
         end)
+
+        it("expone oldPart/newPart y su suma iguala exactamente delta (Analisis del SavedVariables real, punto 1)", function()
+            local r = Ledger.ComputeXPDelta(809, 79, 1000, 12, 13)
+
+            assert.is_not_nil(r.crossing)
+            assert.are.equal(1000 - 809, r.crossing.oldPart)
+            assert.are.equal(79, r.crossing.newPart)
+            assert.are.equal(r.delta, r.crossing.oldPart + r.crossing.newPart)
+            assert.are.equal(12, r.crossing.oldLevel)
+            assert.are.equal(13, r.crossing.newLevel)
+        end)
+    end)
+
+    describe("SplitCrossingEvent", function()
+        it("las dos partes suman exactamente xp y rested del evento original", function()
+            local delta = Ledger.ComputeXPDelta(809, 79, 1000, 12, 13)
+            local paired = { xp = delta.delta, rested = 60, crossing = delta.crossing }
+
+            local split = Ledger.SplitCrossingEvent(paired)
+
+            assert.are.equal(paired.xp, split.old.xp + split.new.xp)
+            assert.are.equal(paired.rested, split.old.rested + split.new.rested)
+        end)
+
+        it("reparte rested proporcionalmente a cada parte, no todo a una", function()
+            -- oldPart=191, newPart=79 (mismo caso que arriba), rested=100:
+            -- floor(100*191/270 + 0.5) = floor(71.24) = 71.
+            local delta = Ledger.ComputeXPDelta(809, 79, 1000, 12, 13)
+            local paired = { xp = delta.delta, rested = 100, crossing = delta.crossing }
+
+            local split = Ledger.SplitCrossingEvent(paired)
+
+            assert.are.equal(71, split.old.rested)
+            assert.are.equal(29, split.new.rested)
+        end)
+
+        it("hereda el mismo reparto aunque rested sea 0", function()
+            local delta = Ledger.ComputeXPDelta(809, 79, 1000, 12, 13)
+            local paired = { xp = delta.delta, rested = 0, crossing = delta.crossing }
+
+            local split = Ledger.SplitCrossingEvent(paired)
+
+            assert.are.equal(0, split.old.rested)
+            assert.are.equal(0, split.new.rested)
+        end)
+
+        it("restedOld nunca supera oldPart, ni siquiera si rested (señal independiente) llegara a superar xp", function()
+            -- oldPart=10, newPart=5, xp=15, pero rested=20 > xp: dos
+            -- señales independientes (delta de UnitXP vs. mensaje de
+            -- descanso) que no tienen por que casar del todo, igual que
+            -- ya contempla core/events.lua: AddEvent. Sin el recorte,
+            -- restedOld saldria en 13 (> oldPart=10).
+            local paired = { xp = 15, rested = 20, crossing = { oldPart = 10, newPart = 5 } }
+
+            local split = Ledger.SplitCrossingEvent(paired)
+
+            assert.are.equal(10, split.old.rested) -- recortado a oldPart
+            assert.are.equal(20, split.old.rested + split.new.rested) -- nada se pierde, solo se reparte distinto
+        end)
     end)
 
     describe("salto de mas de un nivel: no calculable", function()

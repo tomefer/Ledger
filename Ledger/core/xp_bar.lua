@@ -1,10 +1,10 @@
 -- Ledger - core/xp_bar.lua
--- Calcula los segmentos de la barra de composicion de xp del nivel:
--- fusiona registros consecutivos del mismo src en un unico segmento
--- (fusion obligatoria: sin ella son miles de texturas) y calcula la
--- anchura en pixeles de cada uno, proporcional a maxXP. Logica pura: no
--- usa ninguna API de WoW; itera Ledger.SERIES.xp en vez de asumir
--- stride o nombres de campo, por la regla dura de core/series.lua.
+-- Computes the level's xp composition bar segments: merges consecutive
+-- records with the same src into a single segment (merging is
+-- mandatory: without it there'd be thousands of textures) and computes
+-- each one's pixel width, proportional to maxXP. Pure logic: does not
+-- use any WoW API; iterates Ledger.SERIES.xp instead of assuming
+-- stride or field names, per core/series.lua's hard rule.
 
 local ADDON_NAME, Ledger = ...
 
@@ -15,19 +15,19 @@ local XP_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "xp")
 local SRC_FIELD    = Ledger.SeriesFieldIndex(XP_SERIES, "src")
 local RESTED_FIELD = Ledger.SeriesFieldIndex(XP_SERIES, "rested")
 
--- src reservado para el segmento inicial (xp del nivel anterior a que
--- el addon empezara a registrar). No coincide con ningun src real
--- ("kill"/"quest"/"explore"/"unknown"), para que la UI lo distinga sin
--- ambiguedad y lo pinte siempre en gris.
+-- src reserved for the initial segment (xp from before the addon
+-- started tracking the level). Doesn't match any real src
+-- ("kill"/"quest"/"explore"/"unknown"), so the UI can tell it apart
+-- unambiguously and always paint it gray.
 Ledger.BAR_INITIAL_SRC = "previous"
 
--- Reparte totalWidthPx entre `fractions` (cada una 0..1; no hace falta
--- que sumen 1) sin que la suma de anchuras redondeadas supere nunca
--- totalWidthPx: el redondeo de cada segmento se hace sobre el
--- acumulado ideal, no sobre el segmento suelto, asi que el error de
--- redondeo se compensa entre segmentos consecutivos en vez de
--- acumularse sin control. Expuesta (no local): la reutiliza tambien
--- core/time_bar.lua para la barra de reparto de tiempo.
+-- Splits totalWidthPx across `fractions` (each 0..1; they don't need to
+-- add up to 1) without the sum of rounded widths ever exceeding
+-- totalWidthPx: each segment's rounding is done against the ideal
+-- cumulative total, not the loose segment, so the rounding error is
+-- compensated between consecutive segments instead of accumulating
+-- unchecked. Exposed (not local): also reused by core/time_bar.lua for
+-- the time-split bar.
 function Ledger.RoundedWidths(fractions, totalWidthPx)
     local widths = {}
     local idealCumulative, actualCumulative = 0, 0
@@ -40,14 +40,17 @@ function Ledger.RoundedWidths(fractions, totalWidthPx)
     return widths
 end
 
--- Fusiona registros consecutivos del mismo src en un solo segmento
--- (suma xp y rested). Lee flatArray con los campos de Ledger.SERIES.xp,
--- nunca con indices/stride hardcodeados.
+-- Merges consecutive records with the same src into a single segment
+-- (sums xp and rested). Reads flatArray using Ledger.SERIES.xp's
+-- fields, never hardcoded indices/stride. src is persisted as a
+-- numeric ID (Ledger.SRC_IDS); it's translated here to the text name,
+-- which is what the palette expects (ui/xp_bar.lua:
+-- PALETTE[segment.src]).
 local function MergeConsecutive(flatArray)
     local merged = {}
     for i = 1, #flatArray, XP_SERIES.stride do
         local xp     = flatArray[i + XP_FIELD - 1]
-        local src    = flatArray[i + SRC_FIELD - 1]
+        local src    = Ledger.SRC_NAMES[flatArray[i + SRC_FIELD - 1]] or "unknown"
         local rested = flatArray[i + RESTED_FIELD - 1]
 
         local last = merged[#merged]
@@ -61,16 +64,16 @@ local function MergeConsecutive(flatArray)
     return merged
 end
 
--- flatArray: array plano de la serie xp (de una sesion, o de varias ya
--- concatenadas en orden cronologico con Ledger.ConcatSeries -- ver
--- core/series.lua). initialXP: xp del nivel anterior a que el addon
--- empezara a registrar (0 o nil si no hay). widthPx: ancho total de la
--- barra, en pixeles. maxXP: UnitXPMax("player") del nivel, la escala
--- del eje X (0..maxXP).
+-- flatArray: the xp series' flat array (of one session, or several
+-- already concatenated in chronological order with
+-- Ledger.ConcatSeries -- see core/series.lua). initialXP: xp from
+-- before the addon started tracking the level (0 or nil if none).
+-- widthPx: the bar's total width, in pixels. maxXP: the level's
+-- UnitXPMax("player"), the X axis scale (0..maxXP).
 --
--- Devuelve una lista de segmentos en orden: { offset=, width=, src=,
--- restedWidth= } (todo en pixeles; restedWidth <= width siempre, 0 si
--- el segmento no tiene bono por descanso).
+-- Returns an ordered list of segments: { offset=, width=, src=,
+-- restedWidth= } (all in pixels; restedWidth <= width always, 0 if the
+-- segment has no rested bonus).
 function Ledger.ComputeBarSegments(flatArray, initialXP, widthPx, maxXP)
     local merged = MergeConsecutive(flatArray or {})
 

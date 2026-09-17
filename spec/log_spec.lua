@@ -114,7 +114,7 @@ describe("core/log.lua", function()
     describe("FormatLogBuffer", function()
         it("indica cuando el buffer esta vacio", function()
             local state = Ledger.NewLogState()
-            assert.are.equal("(buffer de log vacio)", Ledger.FormatLogBuffer(state))
+            assert.are.equal("(log buffer empty)", Ledger.FormatLogBuffer(state))
         end)
 
         it("formatea cada entrada con su nivel y mensaje, mas antigua primero", function()

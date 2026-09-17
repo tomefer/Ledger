@@ -1,10 +1,10 @@
 -- Ledger - ui/debug_frame.lua
--- Panel de depuracion: frame movible y redimensionable con un EditBox de
--- solo lectura y multilinea (seleccionable, para poder copiar) que
--- muestra el volcado de estado (core/state_dump.lua) o el buffer de log
--- (core/log.lua), segun lo ultimo que se haya pedido (/ldg debug o
--- /ldg log show). Capa fina: el formateo del contenido vive en core/,
--- aqui solo se pinta.
+-- Debug panel: a movable, resizable frame with a read-only, multiline
+-- EditBox (selectable, so it can be copied) that shows either the state
+-- dump (core/state_dump.lua) or the log buffer (core/log.lua),
+-- depending on whichever was last requested (/ldg debug or
+-- /ldg log show). Thin layer: content formatting lives in core/, this
+-- file only paints it.
 
 local ADDON_NAME, Ledger = ...
 
@@ -34,10 +34,10 @@ frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 
 frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 frame.title:SetPoint("TOPLEFT", 12, -10)
-frame.title:SetText("Ledger - depuracion")
+frame.title:SetText("Ledger - debug")
 
 ----------------------------------------------------------------------
--- Redimensionado desde la esquina inferior derecha.
+-- Resizing from the bottom-right corner.
 ----------------------------------------------------------------------
 
 frame:SetResizable(true)
@@ -57,7 +57,7 @@ resizeHandle:SetScript("OnMouseDown", function() frame:StartSizing("BOTTOMRIGHT"
 resizeHandle:SetScript("OnMouseUp", function() frame:StopMovingOrSizing() end)
 
 ----------------------------------------------------------------------
--- Contenido: EditBox multilinea de solo lectura dentro de un scroll.
+-- Content: read-only multiline EditBox inside a scroll frame.
 ----------------------------------------------------------------------
 
 local scrollFrame = CreateFrame("ScrollFrame", "LedgerDebugScrollFrame", frame, "UIPanelScrollFrameTemplate")
@@ -70,9 +70,8 @@ editBox:SetAutoFocus(false)
 editBox:SetFontObject(ChatFontNormal)
 editBox:SetWidth(360)
 editBox:SetScript("OnEscapePressed", editBox.ClearFocus)
--- Solo lectura: cualquier intento de teclear se deshace en el siguiente
--- disparo de OnTextChanged, pero el texto sigue siendo seleccionable con
--- el raton para copiar.
+-- Read-only: any typing attempt gets undone on the next OnTextChanged
+-- firing, but the text stays selectable with the mouse for copying.
 editBox:SetScript("OnTextChanged", function(self)
     if self.suppressChange then return end
     self.suppressChange = true
@@ -83,13 +82,13 @@ end)
 scrollFrame:SetScrollChild(editBox)
 
 ----------------------------------------------------------------------
--- Refresco manual + autorefresco cada 2s.
+-- Manual refresh + auto-refresh every 2s.
 ----------------------------------------------------------------------
 
 local refreshButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
 refreshButton:SetSize(80, 22)
 refreshButton:SetPoint("BOTTOMLEFT", 10, 8)
-refreshButton:SetText("Refrescar")
+refreshButton:SetText("Refresh")
 
 local autoRefreshBox = CreateFrame("CheckButton", "LedgerDebugAutoRefresh", frame, "UICheckButtonTemplate")
 autoRefreshBox:SetSize(24, 24)
@@ -101,8 +100,8 @@ autoRefreshLabel:SetText("Auto (2s)")
 
 Ledger.debugFrame = frame
 
--- currentSource: "state" (volcado de sesion/niveles, core/state_dump.lua)
--- o "log" (buffer de log, core/log.lua). Decide que compone Refresh().
+-- currentSource: "state" (session/levels dump, core/state_dump.lua) or
+-- "log" (log buffer, core/log.lua). Decides what Refresh() composes.
 local currentSource = "state"
 
 local function ComposeContent()
@@ -120,8 +119,8 @@ function Ledger.RefreshDebugFrame()
     editBox.suppressChange = false
 end
 
--- Muestra el panel con la fuente indicada ("state" por defecto o "log")
--- y la recuerda para los refrescos siguientes (manual o automatico).
+-- Shows the panel with the given source ("state" by default, or "log")
+-- and remembers it for subsequent refreshes (manual or automatic).
 function Ledger.ShowDebugFrame(source)
     currentSource = source or "state"
     Ledger.RefreshDebugFrame()

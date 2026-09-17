@@ -9,12 +9,16 @@ describe("core/xp_bar.lua", function()
 
     -- Construye el array plano de la serie xp a partir de una lista de
     -- {xp=, src=, rested=} (off no importa para la barra, siempre 0).
+    -- src se traduce a su ID numerico (Ledger.SRC_IDS): es el formato en
+    -- el que vive de verdad dentro del array (ver core/events.lua:
+    -- AddEvent); ComputeBarSegments lo traduce de vuelta a texto al
+    -- leerlo (core/xp_bar.lua: MergeConsecutive).
     local function events(list)
         local arr = {}
         for _, e in ipairs(list) do
             arr[#arr + 1] = e.off or 0
             arr[#arr + 1] = e.xp
-            arr[#arr + 1] = e.src
+            arr[#arr + 1] = Ledger.SRC_IDS[e.src]
             arr[#arr + 1] = e.rested or 0
         end
         return arr

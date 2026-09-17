@@ -1,10 +1,9 @@
 -- Ledger - core/state_dump.lua
--- Serializador a texto del estado en memoria (sesion activa + niveles
--- cerrados), usado tanto por /ldg debug (panel) como por /ldg dump
--- (chat). Logica pura: no usa ninguna API de WoW, lee la tabla que se le
--- pasa, nunca un SavedVariable directamente. Itera Ledger.SERIES.xp en
--- vez de asumir nombres de campo o stride, por la regla dura de
--- core/series.lua.
+-- Text serializer of the in-memory state (active session + closed
+-- levels), used both by /ldg debug (panel) and /ldg dump (chat). Pure
+-- logic: does not use any WoW API, reads the table it's given, never a
+-- SavedVariable directly. Iterates Ledger.SERIES.xp instead of assuming
+-- field names or stride, per core/series.lua's hard rule.
 
 local ADDON_NAME, Ledger = ...
 
@@ -13,9 +12,9 @@ print("Ledger: core/state_dump.lua")
 local XP_SERIES  = Ledger.SERIES.xp
 local MAX_EVENTS = 30
 
--- offsetTenths esta en decimas de segundo (ver core/events.lua). Formato
--- mm:ss.t, sin limite de minutos (una sesion de mas de una hora sigue
--- creciendo: "60:00.0", "125:30.5"...).
+-- offsetTenths is in tenths of a second (see core/events.lua). Format
+-- mm:ss.t, with no upper limit on minutes (a session longer than an
+-- hour keeps growing: "60:00.0", "125:30.5"...).
 local function FormatOffset(offsetTenths)
     local totalTenths = math.floor(offsetTenths + 0.5)
     local seconds = math.floor(totalTenths / 10)
@@ -26,29 +25,30 @@ local function FormatOffset(offsetTenths)
 end
 Ledger.FormatOffset = FormatOffset
 
--- Cabecera de la sesion activa + hasta MAX_EVENTS eventos, del mas
--- reciente al mas antiguo. session puede ser nil (sin sesion activa).
+-- Active session header + up to MAX_EVENTS events, most recent first.
+-- session can be nil (no active session).
 local function FormatSession(session)
     if not session then
-        return "Sesion activa: ninguna"
+        return "Active session: none"
     end
 
     local lines = {
-        string.format("Sesion activa: nivel %s, modo %s, manual=%s",
-            tostring(session.nivel), session.mode or "ninguno", tostring(session.manual)),
-        string.format("XP total: %d (de descanso: %d)", Ledger.TotalXP(session), Ledger.TotalRested(session)),
+        string.format("Active session: level %s, mode %s, manual=%s",
+            tostring(session.level), session.mode or "none", tostring(session.manual)),
+        string.format("Total XP: %d (rested: %d)", Ledger.TotalXP(session), Ledger.TotalRested(session)),
     }
 
     local count = Ledger.RecordCount(session, XP_SERIES)
     if count == 0 then
-        table.insert(lines, "Eventos: ninguno")
+        table.insert(lines, "Events: none")
     else
         local from = math.max(1, count - MAX_EVENTS + 1)
-        table.insert(lines, string.format("Ultimos eventos (%d de %d), mas reciente primero:", count - from + 1, count))
+        table.insert(lines, string.format("Last events (%d of %d), most recent first:", count - from + 1, count))
         for i = count, from, -1 do
             local record = Ledger.ReadRecord(session, XP_SERIES, i)
-            table.insert(lines, string.format("  %s | %d | %s | descanso=%d",
-                FormatOffset(record.off), record.xp, record.src, record.rested))
+            local srcName = Ledger.SRC_NAMES[record.src] or "?"
+            table.insert(lines, string.format("  %s | %d | %s | rested=%d",
+                FormatOffset(record.off), record.xp, srcName, record.rested))
         end
     end
 
@@ -56,7 +56,7 @@ local function FormatSession(session)
 end
 Ledger.FormatSession = FormatSession
 
--- Resumen de niveles ya cerrados (levels[nivel] = CloseLevel(...)).
+-- Summary of already-closed levels (levels[level] = CloseLevel(...)).
 local function FormatLevels(levels)
     local niveles = {}
     for nivel in pairs(levels or {}) do
@@ -65,21 +65,21 @@ local function FormatLevels(levels)
     table.sort(niveles)
 
     if #niveles == 0 then
-        return "Niveles cerrados: ninguno"
+        return "Closed levels: none"
     end
 
-    local lines = { "Niveles cerrados:" }
+    local lines = { "Closed levels:" }
     for _, nivel in ipairs(niveles) do
         local entry = levels[nivel]
-        table.insert(lines, string.format("  nivel %s: xp=%d, descanso=%d, tiempo=%ds",
-            tostring(entry.nivel), entry.totalXP, entry.totalRested or 0, entry.totalPlayed))
+        table.insert(lines, string.format("  level %s: xp=%d, rested=%d, time=%ds, deaths=%d",
+            tostring(entry.level), entry.totalXP, entry.totalRested or 0, entry.totalPlayed, entry.deaths or 0))
     end
     return table.concat(lines, "\n")
 end
 Ledger.FormatLevels = FormatLevels
 
--- Volcado completo: sesion activa + niveles cerrados. charDB tiene la
--- forma de LedgerCharDB (sessions, levels); puede venir a nil o vacio.
+-- Full dump: active session + closed levels. charDB is shaped like
+-- LedgerCharDB (sessions, levels); it can come in as nil or empty.
 function Ledger.FormatState(charDB)
     charDB = charDB or {}
     local sessions = charDB.sessions or {}

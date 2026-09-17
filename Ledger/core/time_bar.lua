@@ -1,29 +1,29 @@
 -- Ledger - core/time_bar.lua
--- Calcula los segmentos de la barra de reparto de tiempo del nivel: los
--- 4 buckets de core/time_buckets.lua (active, travel, idle, dead) en un
--- orden fijo, con ancho proporcional a su parte del tiempo total. A
--- diferencia de la barra de xp, aqui el eje es siempre el 100% del
--- ancho (no hay maximo externo ni xp previa): no es comparable pixel a
--- pixel con la barra de xp, son ejes distintos. Logica pura: no usa
--- ninguna API de WoW.
+-- Computes the level's time-split bar segments: the 4
+-- core/time_buckets.lua buckets (active, travel, idle, dead) in a fixed
+-- order, with width proportional to their share of the total time.
+-- Unlike the xp bar, here the axis is always 100% of the width (no
+-- external max nor prior xp): it's not comparable pixel-to-pixel with
+-- the xp bar, they're different axes. Pure logic: does not use any WoW
+-- API.
 
 local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/time_bar.lua")
 
--- Orden fijo de izquierda a derecha, siempre el mismo -- para que la
--- forma sea reconocible de un vistazo, nunca reordenado por tamaño.
+-- Fixed left-to-right order, always the same -- so the shape is
+-- recognizable at a glance, never reordered by size.
 Ledger.TIME_BUCKET_ORDER = { "active", "travel", "idle", "dead" }
 
 local function TotalSeconds(buckets)
     return buckets.active + buckets.travel + buckets.idle + buckets.dead
 end
 
--- buckets: { active=, travel=, idle=, dead= } (segundos). widthPx:
--- ancho total de la barra. Devuelve una lista en Ledger.TIME_BUCKET_ORDER:
--- { bucket=, offset=, width= } (offset/width en pixeles). Si el total
--- es 0 (nivel recien empezado, sin ninguna muestra todavia), no hay
--- segmentos que dibujar.
+-- buckets: { active=, travel=, idle=, dead= } (seconds). widthPx: the
+-- bar's total width. Returns a list in Ledger.TIME_BUCKET_ORDER:
+-- { bucket=, offset=, width= } (offset/width in pixels). If the total
+-- is 0 (level just started, no samples yet), there are no segments to
+-- draw.
 function Ledger.ComputeTimeBarSegments(buckets, widthPx)
     local total = TotalSeconds(buckets)
     if total <= 0 then
@@ -47,13 +47,13 @@ function Ledger.ComputeTimeBarSegments(buckets, widthPx)
 end
 
 local BUCKET_LABELS = {
-    active = "Combate",
-    travel = "Viaje",
-    idle   = "Inactivo",
-    dead   = "Muerto",
+    active = "Combat",
+    travel = "Travel",
+    idle   = "Idle",
+    dead   = "Dead",
 }
 
--- Formatea segundos como hh:mm:ss (sin limite de horas).
+-- Formats seconds as hh:mm:ss (no limit on hours).
 function Ledger.FormatHHMMSS(totalSeconds)
     totalSeconds = math.floor(totalSeconds + 0.5)
     local h = math.floor(totalSeconds / 3600)
@@ -62,12 +62,12 @@ function Ledger.FormatHHMMSS(totalSeconds)
     return string.format("%02d:%02d:%02d", h, m, s)
 end
 
--- Contenido del tooltip de la barra de tiempo: una entrada por bucket
--- (en Ledger.TIME_BUCKET_ORDER) con su tiempo absoluto en hh:mm:ss y su
--- porcentaje del total. Devuelve una lista de { bucket=, text= } -- el
--- color de cada linea lo decide quien la pinte (ui/), este fichero no
--- sabe nada de colores ni de GameTooltip. Si el total es 0, el
--- porcentaje de cada bucket es 0 (no divide por cero).
+-- Content of the time bar's tooltip: one entry per bucket (in
+-- Ledger.TIME_BUCKET_ORDER) with its absolute time in hh:mm:ss and its
+-- percentage of the total. Returns a list of { bucket=, text= } -- the
+-- color of each line is decided by whoever paints it (ui/), this file
+-- knows nothing about colors or GameTooltip. If the total is 0, each
+-- bucket's percentage is 0 (no division by zero).
 function Ledger.FormatTimeBarTooltip(buckets)
     local total = TotalSeconds(buckets)
     local lines = {}

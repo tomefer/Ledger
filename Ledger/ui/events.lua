@@ -1,11 +1,11 @@
 -- Ledger - ui/events.lua
--- Registro de eventos, slash command y ciclo de vida del addon.
+-- Event registration, slash command and addon lifecycle.
 
 local ADDON_NAME, Ledger = ...
 
--- Lee la version desde el .toc. En Classic Era 1.15.x conviven el global
--- GetAddOnMetadata y C_AddOns.GetAddOnMetadata; probamos el namespace nuevo
--- primero y caemos al global si no existe.
+-- Reads the version from the .toc. In Classic Era 1.15.x both the
+-- global GetAddOnMetadata and C_AddOns.GetAddOnMetadata exist; we try
+-- the new namespace first and fall back to the global if it's missing.
 local function GetVersion()
     local getter = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
     if getter then
@@ -14,10 +14,10 @@ local function GetVersion()
     return "?"
 end
 
--- Cada linea de msg (puede traer varias, separadas por \n) se manda como
--- un AddMessage aparte, para que un volcado multilinea (help, dump) se
--- vea bien sin depender de como el cliente maneje \n dentro de un unico
--- mensaje.
+-- Each line of msg (it can carry several, separated by \n) is sent as
+-- its own AddMessage, so a multiline dump (help, dump) looks right
+-- without depending on how the client handles \n within a single
+-- message.
 local function Print(msg)
     for line in tostring(msg):gmatch("[^\n]+") do
         DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Ledger|r: " .. line)
@@ -25,17 +25,17 @@ local function Print(msg)
 end
 
 ----------------------------------------------------------------------
--- Estado del log (nivel, buffer, eco a chat). Solo en memoria, como el
--- tracker de buckets y el matcher: no se persiste.
+-- Log state (level, buffer, chat echo). In memory only, like the
+-- bucket tracker and the matcher: it isn't persisted.
 ----------------------------------------------------------------------
 
 Ledger.logState = Ledger.NewLogState()
 
--- Envoltorio fino sobre Ledger.LogMessage: añade el reloj (GetTime(),
--- que core/ nunca toca) y, si el mensaje pasa el filtro de nivel y el
--- eco a chat esta activo, lo imprime. Se pasa como callback a core/ (p.
--- ej. core/xp_gain_matcher.lua) para que los módulos puros puedan
--- describir sus decisiones sin tocar ninguna API de WoW ellos mismos.
+-- Thin wrapper over Ledger.LogMessage: adds the clock (GetTime(), which
+-- core/ never touches) and, if the message passes the level filter and
+-- the chat echo is enabled, prints it. Passed as a callback into core/
+-- (e.g. core/xp_gain_matcher.lua) so the pure modules can describe
+-- their decisions without touching any WoW API themselves.
 function Ledger.Log(level, msg)
     if Ledger.LogMessage(Ledger.logState, level, msg, GetTime()) then
         Print(msg)
@@ -43,9 +43,9 @@ function Ledger.Log(level, msg)
 end
 
 ----------------------------------------------------------------------
--- Slash command /ldg (y alias /ledger). El parseo vive en
--- core/slash_command.lua; aqui solo se despacha. Un subcomando
--- desconocido responde lo mismo que /ldg help.
+-- /ldg slash command (and /ledger alias). Parsing lives in
+-- core/slash_command.lua; this only dispatches. An unknown subcommand
+-- replies the same as /ldg help.
 ----------------------------------------------------------------------
 
 SLASH_LEDGER1 = "/ldg"
@@ -57,12 +57,12 @@ SlashCmdList["LEDGER"] = function(msg)
         if Ledger.frame:IsShown() then
             Ledger.frame:Hide()
             LedgerDB.shown = false
-            Print("oculto")
+            Print("hidden")
         else
             Ledger.UpdateXP()
             Ledger.frame:Show()
             LedgerDB.shown = true
-            Print("hola")
+            Print("hi")
         end
 
     elseif command == "help" then
@@ -76,54 +76,54 @@ SlashCmdList["LEDGER"] = function(msg)
 
     elseif command == "reset" then
         Ledger.ResetSession(GetTime())
-        Print("sesion reiniciada")
+        Print("session reset")
 
     elseif command == "strings" then
         Print(Ledger.FormatXPGainStrings(Ledger.xpGainStrings))
-        Print("Sufijo de bono por descanso (sin confirmar en el juego, ver CLAUDE.md):")
+        Print("Rested-bonus suffix (unconfirmed in-game, see CLAUDE.md):")
         Print(Ledger.FormatXPGainStrings(Ledger.restedStrings))
 
     elseif command == "rested" then
         LedgerDB.includeRested = not LedgerDB.includeRested
         Ledger.UpdateRestedLabel()
-        Print("bono por descanso en las metricas: " .. (LedgerDB.includeRested and "incluido" or "excluido"))
+        Print("rested bonus in metrics: " .. (LedgerDB.includeRested and "included" or "excluded"))
 
     elseif command == "bar" then
         local shown, ok, width, segmentCount = Ledger.ToggleXPBar()
         if not shown then
-            Print("barra de composicion de xp: oculta")
+            Print("xp composition bar: hidden")
         elseif not ok then
-            Print("barra de composicion de xp: mostrada, pero no se ha encontrado la barra de xp nativa para anclarse (a nivel maximo no hay ninguna; si no es el caso, prueba /ldg log trace y /ldg log chat y vuelve a intentarlo)")
+            Print("xp composition bar: shown, but the native xp bar could not be found to anchor to (there is none at max level; if that's not the case, try /ldg log trace and /ldg log chat and try again)")
         elseif segmentCount == 0 then
             Print(string.format(
-                "barra de composicion de xp: mostrada (ancho=%dpx), pero sin xp registrada todavia en este nivel -- gana algo de xp para verla rellenarse",
+                "xp composition bar: shown (width=%dpx), but no xp recorded yet on this level -- gain some xp to see it fill up",
                 width))
         else
-            Print(string.format("barra de composicion de xp: mostrada (ancho=%dpx, %d segmentos)", width, segmentCount))
+            Print(string.format("xp composition bar: shown (width=%dpx, %d segments)", width, segmentCount))
         end
 
     elseif command == "time" then
         local shown = Ledger.ToggleTimeBar()
-        Print("barra de reparto de tiempo: " .. (shown and "mostrada" or "oculta"))
+        Print("time-split bar: " .. (shown and "shown" or "hidden"))
 
     elseif command == "wipe" then
         if args[1] == "confirm" then
             Ledger.WipeCharacterData(GetTime())
-            Print("base de datos del personaje borrada. Sesion nueva abierta desde el nivel y xp actuales.")
+            Print("character database wiped. New session opened from the current level and xp.")
         else
-            Print("esto borra TODAS las sesiones y niveles guardados de este personaje -- no se puede deshacer. Escribe /ldg wipe confirm para continuar.")
+            Print("this deletes ALL saved sessions and levels for this character -- it cannot be undone. Type /ldg wipe confirm to proceed.")
         end
 
     elseif command == "log" then
         local action = args[1]
         if Ledger.IsValidLogLevel(action) then
             Ledger.SetLogLevel(Ledger.logState, action)
-            Print("nivel de log: " .. action)
+            Print("log level: " .. action)
         elseif action == "show" then
             Ledger.ShowDebugFrame("log")
         elseif action == "chat" then
             local enabled = Ledger.ToggleLogChat(Ledger.logState)
-            Print("eco de log al chat: " .. (enabled and "activado" or "desactivado"))
+            Print("log echo to chat: " .. (enabled and "enabled" or "disabled"))
         else
             Print(Ledger.HelpText())
         end
@@ -134,7 +134,7 @@ SlashCmdList["LEDGER"] = function(msg)
 end
 
 ----------------------------------------------------------------------
--- Eventos
+-- Events
 ----------------------------------------------------------------------
 
 local ev = CreateFrame("Frame")
@@ -145,7 +145,7 @@ ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_XP_UPDATE")
 ev:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" then
-        -- Las SavedVariables ya estan cargadas cuando llega nuestro propio nombre.
+        -- SavedVariables are already loaded by the time our own name arrives.
         if arg1 == ADDON_NAME then
             LedgerDB = Ledger.InitDB(LedgerDB, Ledger.DEFAULTS)
             LedgerCharDB = Ledger.InitCharDB(LedgerCharDB)
@@ -166,25 +166,25 @@ ev:SetScript("OnEvent", function(self, event, arg1)
             Ledger.timeBarFrame:Show()
             Ledger.RedrawTimeBar()
         end
-        Print("cargado, version " .. GetVersion())
+        Print("loaded, version " .. GetVersion())
         self:UnregisterEvent("PLAYER_LOGIN")
 
     elseif event == "PLAYER_ENTERING_WORLD" then
-        -- Login y cada pantalla de carga (zona, instancia, resurreccion).
+        -- Login and every loading screen (zone, instance, resurrection).
         Ledger.UpdateXP()
-        -- Red de seguridad: si la barra nativa no tenia todavia su
-        -- ancho definitivo en PLAYER_LOGIN, aqui ya lo tiene.
+        -- Safety net: if the native bar didn't have its final width yet
+        -- at PLAYER_LOGIN, it does by now.
         Ledger.RedrawXPBarFull()
         Ledger.RedrawTimeBar()
 
     elseif event == "PLAYER_XP_UPDATE" then
-        -- arg1 es la unidad; solo nos interesa el jugador.
+        -- arg1 is the unit; we only care about the player.
         if arg1 == "player" then
             Ledger.UpdateXP()
         end
 
     elseif event == "PLAYER_LOGOUT" then
-        -- Red de seguridad por si el frame quedo movido sin OnDragStop.
+        -- Safety net in case the frame got moved without an OnDragStop.
         Ledger.SavePosition()
     end
 end)

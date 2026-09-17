@@ -30,13 +30,13 @@ describe("core/state_dump.lua", function()
     describe("FormatState: tabla vacia", function()
         it("no rompe sin sesiones ni niveles", function()
             local text = Ledger.FormatState({})
-            assert.is_not_nil(text:find("Sesion activa: ninguna", 1, true))
-            assert.is_not_nil(text:find("Niveles cerrados: ninguno", 1, true))
+            assert.is_not_nil(text:find("Active session: none", 1, true))
+            assert.is_not_nil(text:find("Closed levels: none", 1, true))
         end)
 
         it("acepta charDB a nil", function()
             local text = Ledger.FormatState(nil)
-            assert.is_not_nil(text:find("Sesion activa: ninguna", 1, true))
+            assert.is_not_nil(text:find("Active session: none", 1, true))
         end)
     end)
 
@@ -49,8 +49,8 @@ describe("core/state_dump.lua", function()
 
             local text = Ledger.FormatState({ sessions = { session } })
 
-            assert.is_not_nil(text:find("nivel 10", 1, true))
-            assert.is_not_nil(text:find("Ultimos eventos (30 de 35)", 1, true))
+            assert.is_not_nil(text:find("level 10", 1, true))
+            assert.is_not_nil(text:find("Last events (30 of 35)", 1, true))
 
             local firstEventLine = text:match("| 35 |")
             assert.is_not_nil(firstEventLine)
@@ -61,14 +61,14 @@ describe("core/state_dump.lua", function()
     describe("FormatState: niveles cerrados", function()
         it("lista cada nivel ordenado con su xp y tiempo", function()
             local levels = {
-                [12] = { nivel = 12, totalXP = 500, totalPlayed = 600 },
-                [7]  = { nivel = 7, totalXP = 200, totalPlayed = 300 },
+                [12] = { level = 12, totalXP = 500, totalPlayed = 600 },
+                [7]  = { level = 7, totalXP = 200, totalPlayed = 300 },
             }
 
             local text = Ledger.FormatState({ levels = levels })
 
-            local pos7  = text:find("nivel 7:", 1, true)
-            local pos12 = text:find("nivel 12:", 1, true)
+            local pos7  = text:find("level 7:", 1, true)
+            local pos12 = text:find("level 12:", 1, true)
             assert.is_not_nil(pos7)
             assert.is_not_nil(pos12)
             assert.is_true(pos7 < pos12)

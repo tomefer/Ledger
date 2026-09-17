@@ -1,10 +1,10 @@
 -- Ledger - core/chat_patterns.lua
--- Convierte un global string de Blizzard (con %s/%d como marcadores) en
--- un patron de Lua para reconocer y capturar datos de los mensajes de
--- chat reales, sin hardcodear ningun texto: los global strings cambian
--- de idioma a idioma, pero el %s/%d de sus marcadores no. Logica pura:
--- no toca ninguna API de WoW, recibe el texto del global string ya
--- leido por quien llama.
+-- Converts a Blizzard global string (with %s/%d as placeholders) into a
+-- Lua pattern to recognize and capture data from real chat messages,
+-- without hardcoding any text: global strings change from language to
+-- language, but their %s/%d placeholders don't. Pure logic: does not
+-- touch any WoW API, receives the global string's text already read by
+-- the caller.
 
 local ADDON_NAME, Ledger = ...
 
@@ -14,44 +14,44 @@ local function EscapeMagic(text)
     return (text:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"))
 end
 
--- Comun a BuildPattern y BuildSuffixPattern: %s pasa a ser un grupo de
--- captura de texto y %d uno de digitos; el resto del texto se escapa
--- para que se compare literalmente.
+-- Shared by BuildPattern and BuildSuffixPattern: %s becomes a text
+-- capture group and %d a digit one; the rest of the text is escaped so
+-- it's compared literally.
 local function ConvertFormatString(formatString)
     local marked  = formatString:gsub("%%s", "\1"):gsub("%%d", "\2")
     local escaped = EscapeMagic(marked)
     return escaped:gsub("\1", "(.-)"):gsub("\2", "(%%d+)")
 end
 
--- Convierte "%s dies, you gain %d experience." en
--- "^(.-) dies, you gain (%d+) experience%.". Solo se ancla el principio
--- (^), no el final: el mensaje real puede continuar con texto que el
--- global string no contempla (p.ej. "(+86 exp Rested bonus)" del bono
--- por descanso), y un %d+ ya para de capturar en el primer caracter no
--- numerico, asi que no hace falta un $ para que la captura sea exacta.
+-- Converts "%s dies, you gain %d experience." into
+-- "^(.-) dies, you gain (%d+) experience%.". Only the start is anchored
+-- (^), not the end: the real message can continue with text the global
+-- string doesn't account for (e.g. "(+86 exp Rested bonus)" for the
+-- rested bonus), and %d+ already stops capturing at the first
+-- non-digit character, so there's no need for a $ to keep the capture
+-- exact.
 function Ledger.BuildPattern(formatString)
     return "^" .. ConvertFormatString(formatString)
 end
 
--- Igual que BuildPattern pero sin anclar el principio: sirve para
--- localizar un sufijo en cualquier punto del mensaje (p.ej. el bono por
--- descanso, que va pegado al final de la frase de xp de combate, no al
--- principio).
+-- Same as BuildPattern but without anchoring the start: used to locate
+-- a suffix anywhere in the message (e.g. the rested bonus, which is
+-- attached to the end of the combat xp sentence, not the start).
 function Ledger.BuildSuffixPattern(formatString)
     return ConvertFormatString(formatString)
 end
 
--- Prueba `msg` contra cada entrada de `entries` (en orden; cada una
--- {name=, text=, pattern=}, ver ui/xp_capture.lua) y clasifica el
--- origen: "kill" si la variante que caso lleva nombre de criatura (su
--- global string tiene un %s), "explore" si no, o si ninguna entrada
--- casa -- CHAT_MSG_COMBAT_XP_GAIN solo se dispara para xp de combate o
--- exploracion del propio jugador, asi que su sola llegada ya descarta
--- "unknown" aunque no reconozcamos el formato exacto del mensaje.
--- Devuelve ademas `attempts`, el registro de cada entrada probada (en
--- orden) con si caso y que capturo, para que quien llame pueda loguear
--- el intento completo sin repetir este bucle. Logica pura: no toca
--- ninguna API de WoW.
+-- Tests `msg` against each entry of `entries` (in order; each one
+-- {name=, text=, pattern=}, see ui/xp_capture.lua) and classifies the
+-- source: "kill" if the variant that matched carries a creature name
+-- (its global string has a %s), "explore" if not, or if no entry
+-- matches at all -- CHAT_MSG_COMBAT_XP_GAIN only fires for the
+-- player's own combat or exploration xp, so its mere arrival already
+-- rules out "unknown" even if we don't recognize the message's exact
+-- format. Also returns `attempts`, the record of each entry tried (in
+-- order) with whether it matched and what it captured, so the caller
+-- can log the whole attempt without repeating this loop. Pure logic:
+-- does not touch any WoW API.
 function Ledger.ClassifyXPGainMatch(entries, msg)
     local attempts = {}
 
@@ -75,12 +75,12 @@ function Ledger.ClassifyXPGainMatch(entries, msg)
     return "explore", attempts
 end
 
--- Busca el sufijo del bono por descanso en cualquier punto de `msg`,
--- probando cada entrada de `entries` (en orden; {name=, text=,
--- pattern=} con pattern de BuildSuffixPattern) hasta que una case.
--- Devuelve la cantidad capturada (numero) o 0 si ninguna casa -- rested
--- = 0 es "no hubo bono", igual que cuando el mensaje no trae sufijo.
--- Logica pura: no toca ninguna API de WoW.
+-- Looks for the rested-bonus suffix anywhere in `msg`, trying each
+-- entry of `entries` (in order; {name=, text=, pattern=} with a
+-- pattern from BuildSuffixPattern) until one matches. Returns the
+-- captured amount (a number) or 0 if none matches -- rested = 0 means
+-- "there was no bonus", same as when the message carries no suffix at
+-- all. Pure logic: does not touch any WoW API.
 function Ledger.ExtractRestedBonus(entries, msg)
     for _, entry in ipairs(entries or {}) do
         local captured = msg:match(entry.pattern)
@@ -91,21 +91,20 @@ function Ledger.ExtractRestedBonus(entries, msg)
     return 0
 end
 
--- Formatea la lista de global strings de xp en uso (ver
--- ui/xp_capture.lua: cada entrada es { name=, text=, pattern= }) para
--- /ldg strings: nombre del global string, su valor literal en este
--- cliente y el patron Lua derivado, para poder comprobar a ojo si la
--- conversion es correcta. Logica pura: formatea lo que se le pasa, no
--- lee _G.
+-- Formats the list of xp global strings in use (see ui/xp_capture.lua:
+-- each entry is { name=, text=, pattern= }) for /ldg strings: the
+-- global string's name, its literal value in this client and the
+-- derived Lua pattern, to eyeball whether the conversion is correct.
+-- Pure logic: formats what it's given, does not read _G.
 function Ledger.FormatXPGainStrings(entries)
     if not entries or #entries == 0 then
-        return "No se ha encontrado ningun global string COMBATLOG_XPGAIN_* en este cliente"
+        return "No COMBATLOG_XPGAIN_* global string found in this client"
     end
 
-    local lines = { "Global strings de xp en uso:" }
+    local lines = { "Xp global strings in use:" }
     for _, entry in ipairs(entries) do
         table.insert(lines, string.format("%s = %s", entry.name, entry.text))
-        table.insert(lines, string.format("  patron: %s", entry.pattern))
+        table.insert(lines, string.format("  pattern: %s", entry.pattern))
     end
     return table.concat(lines, "\n")
 end

@@ -125,6 +125,48 @@ describe("core/xp_gain_matcher.lua", function()
         end)
     end)
 
+    describe("crossing (subida de nivel) viaja pegado a la cantidad", function()
+        it("llega en el resultado si la fuente casa despues", function()
+            local m = Ledger.NewMatcher(1)
+            local crossing = { oldPart = 191, newPart = 79, oldLevel = 12, newLevel = 13 }
+
+            assert.is_nil(Ledger.AddAmount(m, 10.0, 270, nil, crossing))
+            local paired = Ledger.AddSource(m, 10.05, "kill")
+
+            assert.are.same(crossing, paired.crossing)
+        end)
+
+        it("llega en el resultado si la fuente casa antes (origen encolado primero)", function()
+            local m = Ledger.NewMatcher(1)
+            local crossing = { oldPart = 191, newPart = 79, oldLevel = 12, newLevel = 13 }
+
+            Ledger.AddSource(m, 20.0, "kill")
+            local paired = Ledger.AddAmount(m, 20.05, 270, nil, crossing)
+
+            assert.are.same(crossing, paired.crossing)
+        end)
+
+        it("sobrevive al Flush si nunca llega ninguna fuente (huerfana, src=unknown)", function()
+            local m = Ledger.NewMatcher(1)
+            local crossing = { oldPart = 191, newPart = 79, oldLevel = 12, newLevel = 13 }
+
+            Ledger.AddAmount(m, 100.0, 270, nil, crossing)
+            local flushed = Ledger.Flush(m, 101.5)
+
+            assert.are.equal(1, #flushed)
+            assert.are.equal("unknown", flushed[1].src)
+            assert.are.same(crossing, flushed[1].crossing)
+        end)
+
+        it("una cantidad sin crossing sigue sin llevar ese campo", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddAmount(m, 10.0, 50)
+            local paired = Ledger.AddSource(m, 10.05, "kill")
+
+            assert.is_nil(paired.crossing)
+        end)
+    end)
+
     describe("fuente quest y prioridad sobre explore", function()
         it("una entrega de quest normal se empareja con src=quest y expectedXP", function()
             local m = Ledger.NewMatcher(1)
