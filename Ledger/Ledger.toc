@@ -2,7 +2,7 @@
 ## Title: Ledger
 ## Notes: Experience tracking. Minimal skeleton.
 ## Author: tomef
-## Version: 0.1.0
+## Version: 0.2.0
 ## SavedVariables: LedgerDB
 ## SavedVariablesPerCharacter: LedgerCharDB
 
@@ -20,9 +20,11 @@ core/slash_command.lua
 core/state_dump.lua
 core/xp_bar.lua
 core/time_bar.lua
+core/export.lua
 
 ui/frame.lua
 ui/debug_frame.lua
+ui/export_frame.lua
 ui/palette.lua
 ui/xp_bar.lua
 ui/time_bar.lua

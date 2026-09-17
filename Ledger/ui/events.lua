@@ -106,6 +106,9 @@ SlashCmdList["LEDGER"] = function(msg)
         local shown = Ledger.ToggleTimeBar()
         Print("time-split bar: " .. (shown and "shown" or "hidden"))
 
+    elseif command == "export" then
+        Ledger.ToggleExportFrame()
+
     elseif command == "wipe" then
         if args[1] == "confirm" then
             Ledger.WipeCharacterData(GetTime())

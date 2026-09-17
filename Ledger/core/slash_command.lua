@@ -20,6 +20,7 @@ Ledger.SLASH_COMMANDS = {
     { name = "bar", desc = "shows or hides the level's xp composition bar, anchored over the native bar" },
     { name = "time", desc = "shows or hides the level's time-split bar (active/travel/idle/dead), independent of /ldg bar" },
     { name = "wipe", desc = "wipe confirm deletes ALL saved sessions and levels for this character (irreversible)" },
+    { name = "export", desc = "shows or hides a window with the character's full data (JSON/CSV), pre-selected to copy with Ctrl+C" },
 }
 
 local KNOWN_COMMANDS = {}

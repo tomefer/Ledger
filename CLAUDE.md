@@ -70,6 +70,9 @@ Interface/AddOns, apuntes viejos) es residuo del nombre anterior.
     porque es irreversible. Solo afecta a `LedgerCharDB` (por
     personaje); no toca `LedgerDB` (posición del panel, `includeRested`,
     `barShown`, etc., que son de cuenta).
+  - `/ldg export`: muestra u oculta el panel de exportación
+    (`ui/export_frame.lua`), con el volcado completo de `LedgerCharDB`
+    en JSON o CSV (ver "Exportación de datos" más abajo).
 - Despliegue: hay un symlink desde Interface/AddOns. Como el addon se
   ha renombrado (carpeta y .toc pasan de `XPTrack` a `Ledger`), **hay que
   recrear ese symlink** apuntando a la carpeta `Ledger/` — WoW exige que
@@ -751,6 +754,90 @@ abre con `/ldg log show`.
 hace mucho pero no se han probado todavía dentro del cliente 1.15.x.
 Comprobar con `/reload` tras cargar el addon.
 
+### Exportación de datos (`core/export.lua` + `ui/export_frame.lua`, `/ldg export`)
+
+Vuelca `LedgerCharDB` completo (todas las sesiones del nivel en curso
+y todos los niveles ya cerrados, no solo la sesión activa como
+`state_dump.lua`) a JSON o CSV, para copiar y analizar fuera del
+juego.
+
+- **Modelo intermedio compartido** (`Ledger.BuildExportModel(charDB)`,
+  lógica pura): decodifica la forma cruda de `LedgerCharDB` (`src`
+  como ID numérico, arrays planos de la serie xp, `levels` indexado
+  por número) a tablas Lua planas que usan tanto `ExportJSON` como
+  `ExportCSV`, para que ninguno de los dos formatos tenga que
+  reimplementar la traducción de `src` (`Ledger.SRC_NAMES`) ni los
+  totales (`Ledger.TotalXP`/`TotalRested`/`XPBySource`) por su cuenta.
+  Itera `Ledger.SERIES.xp` igual que `state_dump.lua`, por la misma
+  regla dura de `core/series.lua`.
+- **JSON escrito a mano**: no hay ninguna librería JSON disponible en
+  el sandbox del addon y no se pueden añadir dependencias externas
+  (ver "Restricciones" arriba), así que el encoder no es genérico —
+  no intenta adivinar si una tabla vacía es un array o un objeto en
+  ningún sitio — sino un puñado de primitivas de bajo nivel
+  (`Ledger.JSONString`/`JSONNumber`/`JSONEscapeString`) que cada punto
+  de la serialización combina ya sabiendo qué forma está construyendo.
+  `Ledger.JSONEscapeString` escapa barra invertida, comillas dobles y
+  todo carácter de control (`0x00`-`0x1F`) como `\uXXXX`.
+  `Ledger.JSONNumber` usa `string.format("%.14g", n)` para evitar tanto
+  notación científica como el ruido de un `.0` final en los enteros.
+  Los tests (`spec/export_spec.lua`) validan el JSON de verdad
+  decodificándolo con `dkjson` — una dependencia **solo de test**
+  (instalada vía luarocks en el entorno de `busted`), nunca del addon:
+  el sandbox de WoW sigue sin tener ninguna librería JSON, por eso
+  `core/export.lua` la escribe a mano.
+- **CSV en tres secciones** (`# levels` / `# sessions` / `# events`,
+  separadas por línea en blanco y un comentario `# nombre`): CSV no
+  tiene un concepto nativo de varias tablas en un mismo fichero, así
+  que esta es la convención más ligera que se sigue pudiendo pegar en
+  una hoja de cálculo y separar a mano si hiciera falta. Las filas de
+  `# sessions` siempre llevan sus agregados
+  (`eventCount`/`totalXP`/`totalRested`), así que omitir `# events` por
+  tamaño nunca pierde ese resumen.
+- **Umbral de tamaño** (`Ledger.EXPORT_MAX_EVENTS`, 1000): un EditBox
+  con cientos de miles de caracteres puede tirar el rendimiento del
+  panel. Por encima de ese número de eventos xp (sumados entre todas
+  las sesiones del nivel en curso), tanto `ExportJSON` como `ExportCSV`
+  dejan de incluir el array/sección de eventos crudos y se quedan solo
+  con los agregados por sesión (`eventCount`, `totalXP`, `totalRested`,
+  `bySource`) — suficiente para revisar el historial sin poder
+  reproducirlo evento a evento. `includeEvents`/`totalEventCount` en el
+  JSON (y la línea `# events omitted: ...` en el CSV) dejan claro
+  cuándo se ha aplicado el recorte y cuántos eventos había en realidad.
+  Los niveles ya cerrados (`levels`) nunca se recortan: ya son
+  agregados de por sí (`core/level_close.lua`), su tamaño no depende
+  de cuánta xp se haya registrado.
+- **Panel** (`ui/export_frame.lua`, mismo patrón que
+  `ui/debug_frame.lua`: frame movible/redimensionable con un EditBox
+  multilínea de solo lectura dentro de un scroll frame): dos botones
+  (`JSON`/`CSV`) alternan el formato y un botón `Refresh` vuelve a leer
+  `LedgerCharDB` sin cerrar el panel — el formato elegido persiste
+  mientras dura la sesión de juego (variable local, no se guarda en
+  ninguna SavedVariable), igual que `currentSource` en
+  `ui/debug_frame.lua`. Cada refresco (al abrir, al cambiar de
+  formato o al pulsar `Refresh`) llama a `editBox:SetFocus()` seguido
+  de `editBox:HighlightText()`, para que el contenido quede
+  seleccionado y Ctrl+C lo copie entero sin tener que hacer clic
+  dentro antes. Escape cierra el panel por dos vías a la vez: se
+  registra en `UISpecialFrames` (el mecanismo estándar de los paneles
+  de Blizzard para cerrar con Escape sin depender del foco) y además
+  el propio EditBox define `OnEscapePressed` para ocultar el frame —
+  hace falta lo segundo porque un EditBox con el foco (el estado
+  normal aquí, precisamente para que Ctrl+C funcione al momento)
+  consume la tecla Escape él solo, antes de que el manejador global de
+  `UISpecialFrames` llegue a verla.
+
+**Pendiente de verificar en el juego** (nada de esto se ha probado
+todavía dentro del cliente 1.15.x): que `UISpecialFrames` cierre de
+verdad el panel con Escape; que `editBox:SetFocus()` +
+`editBox:HighlightText()` dejen el texto realmente seleccionado y que
+Ctrl+C lo copie al portapapeles del sistema (la API de WoW no da
+acceso directo al portapapeles; esto depende de que el cliente trate
+un EditBox enfocado como cualquier campo de texto nativo del sistema
+operativo); y que un volcado real por encima de
+`Ledger.EXPORT_MAX_EVENTS` no note tirón alguno al pintarse en el
+EditBox.
+
 ### Sistema de log (`core/log.lua`)
 
 Estado en memoria (no persistido, igual que el tracker de buckets y el
@@ -976,3 +1063,9 @@ falta en el `.toc`).
   probada): anclaje 2px por encima de la barra de xp, el orden fijo
   active/travel/idle/dead, los colores (incluidos los que reutilizan
   `kill`/`unknown`), el borde, y su tooltip.
+- Verificar en el juego el panel de exportación (`/ldg export`, ver
+  "Exportación de datos" arriba, nunca probado): que `UISpecialFrames`
+  cierre el panel con Escape, que `editBox:HighlightText()` deje el
+  texto realmente seleccionado y que Ctrl+C lo copie al portapapeles
+  del sistema, y que un volcado real por encima de
+  `Ledger.EXPORT_MAX_EVENTS` no note tirón alguno al pintarse.
