@@ -22,6 +22,10 @@ Ledger.DEFAULTS = {
     -- user-configurable (no resize handle), just a sane fixed size.
     barDefaultPos   = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 120 },
     barDefaultWidth = 200,
+    rateShown       = false,
+    -- No ratePos default on purpose: nil means "anchor above the xp
+    -- bar" (ui/rate_frame.lua: RestoreRatePosition). Only gets set
+    -- once the player actually drags the headline number frame.
 }
 
 -- Historical schema of the xp series in version 2 (before splitting the

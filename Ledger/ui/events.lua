@@ -110,6 +110,10 @@ SlashCmdList["LEDGER"] = function(msg)
         local shown = Ledger.ToggleTimeBar()
         Print("time-split bar: " .. (shown and "shown" or "hidden"))
 
+    elseif command == "rate" then
+        local shown = Ledger.ToggleRateFrame()
+        Print("xp/hour number: " .. (shown and "shown" or "hidden"))
+
     elseif command == "export" then
         Ledger.ToggleExportFrame()
 
@@ -176,6 +180,11 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         if LedgerDB.timeBarShown then
             Ledger.timeBarFrame:Show()
             Ledger.RedrawTimeBar()
+        end
+        Ledger.RestoreRatePosition()
+        if LedgerDB.rateShown then
+            Ledger.rateFrame:Show()
+            Ledger.RefreshRateFrame()
         end
         Print("loaded, version " .. GetVersion())
         self:UnregisterEvent("PLAYER_LOGIN")

@@ -74,6 +74,10 @@ vez de suponer.
   - `/ldg time`: muestra u oculta la barra de reparto de tiempo del
     nivel (active/travel/idle/dead), independiente de `/ldg bar` (ver
     "Barra de reparto de tiempo" más abajo).
+  - `/ldg rate`: muestra u oculta el número destacado de xp/hora de la
+    sesión actual, anclado encima de la barra de composición de xp;
+    pasar el ratón por encima abre un panel propio con el desglose
+    sesión/nivel (ver "Número principal de xp/hora" más abajo).
   - `/ldg wipe confirm`: borra por completo `LedgerCharDB` (todas las
     sesiones y niveles guardados de este personaje) y arranca el
     seguimiento desde cero, sin `/reload`
@@ -808,6 +812,98 @@ máximo externo) — las dos barras no son comparables píxel a píxel.
   frame — **independiente de `/ldg bar`**, cada una se muestra u oculta
   por su cuenta.
 
+### Número principal de xp/hora (`core/rate.lua` + `ui/rate_frame.lua`, `/ldg rate`)
+
+Frame propio, "destacado" (`SetFrameStrata("HIGH")`, por encima de las
+barras de xp/tiempo si llegaran a solaparse), anclado justo encima de
+la barra de composición de xp — `frame:SetPoint("BOTTOM",
+Ledger.xpBarFrame, "TOP", 0, 2)`, un único punto de anclaje que centra
+horizontalmente por construcción (`"BOTTOM"`/`"TOP"` son ya el
+centro-superior/centro-inferior del frame, no una esquina) y con 2px de
+separación. Como es una relación de anclaje viva de WoW, no hace falta
+re-anclar nunca tras el primer `SetPoint`: el número sigue a
+`Ledger.xpBarFrame` automáticamente aunque ese frame se mueva o
+redibuje (incluido su propio modo degradado — ver "Localización de la
+barra nativa" arriba), sin ningún código adicional aquí.
+
+- **El número**: xp/hora de la **sesión activa** (`Ledger.TotalXP(session,
+  includeRested) / (time() - session.t0) * 3600`, ver
+  `core/rate.lua: Ledger.ComputeXPRate`), nunca del nivel — ese es el
+  dato del panel al pasar el ratón (ver abajo). Tipografía
+  `GameFontNormalHuge`, blanco (`text:SetTextColor(1,1,1,1)`), sobre
+  fondo negro semitransparente (`SetBackdropColor(0,0,0,0.6)`) que se
+  ajusta al texto con padding (`ui/rate_frame.lua: ResizeToText`,
+  `PADDING_X`/`PADDING_Y`) en vez de tener un ancho fijo.
+- **Formato** (`core/rate.lua: Ledger.FormatXPRate`, pura): redondea al
+  entero más cercano, separador de miles a mano (idioma clásico de
+  Lua: inserta una coma antes de cada grupo de 3 dígitos repetidamente
+  hasta que `gsub` deja de encontrar más, sin ninguna librería) y
+  sufijo `" xp/h"`. `nil` (ver el umbral justo abajo) se formatea como
+  `"-"`, nunca como `"0 xp/h"` ni un número inventado.
+- **Guion con menos de un minuto de sesión**
+  (`Ledger.RATE_MIN_SECONDS = 60`, `core/rate.lua: Ledger.ComputeXPRate`):
+  por debajo de ese umbral de segundos transcurridos, el denominador es
+  tan pequeño que la tasa sale disparada (50xp en 5s son 36000 xp/h) —
+  `ComputeXPRate` devuelve `nil` y `FormatXPRate` lo convierte en `"-"`.
+  Un numerador a 0 con tiempo transcurrido de sobra sigue siendo una
+  tasa real de `0` (no un guion): el guion es solo por denominador
+  pequeño, nunca por xp pequeña o nula.
+- **Respeta `includeRested`**: `Ledger.ComputeHeadlineRates` recibe el
+  toggle (`LedgerDB.includeRested`) y lo reenvía a `Ledger.TotalXP`/
+  `Ledger.TotalXPAcrossSessions` para las dos tasas (sesión y nivel) —
+  mismo significado que en el resto del addon (ver "Series
+  declarativas" arriba), nunca una lógica aparte aquí.
+- **Refresco**: `C_Timer.NewTicker(1, Ledger.RefreshRateFrame)`, un
+  ticker propio de este fichero (independiente de los dos ya existentes
+  en `ui/xp_capture.lua` — el addon ya tenía más de un ticker de 1s a
+  la vez antes de esto, cada uno con su responsabilidad propia).
+  `RefreshRateFrame` no hace nada si el frame está oculto
+  (`frame:IsShown()`), y si el panel al pasar el ratón está abierto en
+  ese momento, también lo redibuja — para que no se quede desfasado
+  mientras el jugador lo tiene abierto.
+- **Movible, posición persistida**: `frame:RegisterForDrag` +
+  `OnDragStop` guardan `LedgerDB.ratePos` (mismo patrón que
+  `ui/frame.lua: SavePosition`). **A propósito, sin entrada en
+  `Ledger.DEFAULTS`**: mientras `LedgerDB.ratePos` sea `nil`
+  (nunca arrastrado), `Ledger.RestoreRatePosition()` vuelve a anclar
+  encima de la barra de xp por defecto; en cuanto el jugador lo
+  arrastra una vez, esa posición absoluta pasa a mandar en cada login,
+  igual que la posición del panel principal.
+- `/ldg rate` alterna `LedgerDB.rateShown` y muestra/oculta el frame.
+
+**Panel al pasar el ratón** (`ui/rate_frame.lua`, frame propio —
+`LedgerRateHoverPanel` — **nunca `GameTooltip`**, a diferencia de la
+barra de xp/tiempo): construido a partir de una estructura genérica de
+secciones que vive en `core/rate.lua`, pensada para crecer sin
+rehacerse.
+
+- **`Ledger.BuildRatePanelSections(rates)`** (pura, `rates =
+  { sessionRate=, levelRate= }` ya calculado por
+  `Ledger.ComputeHeadlineRates`): devuelve `{ { title=, rows = {
+  {label=, value=, color=}, ... } }, ... }` — hoy una única sección
+  `"XP/hour"` con dos filas (`"This session"`, el mismo número que el
+  frame principal, en `Ledger.RATE_HIGHLIGHT_COLOR` blanco; `"This
+  level"`, en `Ledger.RATE_DEFAULT_COLOR` gris claro). Añadir el
+  histórico de últimos niveles o un desglose por origen más adelante es
+  añadir otra entrada a esta lista — `ui/rate_frame.lua:
+  RenderHoverPanel` recorre secciones y filas genéricamente, sin
+  asumir cuántas hay de cada.
+- **Colores propios, no `Ledger.PALETTE`**: `RATE_HIGHLIGHT_COLOR`/
+  `RATE_DEFAULT_COLOR` viven en `core/rate.lua`, no en
+  `ui/palette.lua` — son sobre énfasis visual (fila destacada vs. el
+  resto), no identidad de src/bucket, y `core/` debe seguir siendo
+  cargable y testeable en solitario (regla dura de
+  `core/series.lua`), nunca dependiendo de nada que defina `ui/`.
+- **Render**: pool de `FontString` reutilizables
+  (`ui/rate_frame.lua: GetOrCreateLine`, mismo patrón de pool que la
+  barra de xp) — nunca se crean ni destruyen por evento, las sobrantes
+  de un render más corto que el anterior simplemente se ocultan. El
+  panel se redimensiona a su contenido (`hoverPanel:SetSize`) igual que
+  el número principal.
+- `lastRates` (local a `ui/rate_frame.lua`) cachea el último cálculo
+  del ticker: `OnEnter` reutiliza ese valor en vez de recalcular — el
+  ticker ya lo mantiene fresco con menos de un segundo de margen.
+
 ### Panel de depuración y volcado de estado (`core/state_dump.lua`)
 
 `Ledger.FormatState(charDB)` es el serializador puro que comparten
@@ -1244,3 +1340,14 @@ falta en el `.toc`).
   `/reload`, y el aviso INFO salga una sola vez por sesión; y que
   `UI_SCALE_CHANGED` reancle de verdad al cambiar la escala de la UI
   (`Configuración → Interfaz`), no solo `PLAYER_ENTERING_WORLD`.
+- Ver visualmente en el juego el número de xp/hora y su panel al pasar
+  el ratón (`/ldg rate`, ver "Número principal de xp/hora" arriba,
+  nunca probado): que el anclaje centrado 2px sobre la barra de xp se
+  vea bien (incluido cómo queda si la barra de reparto de tiempo
+  también está activa — ambas reclaman ese mismo hueco encima de la
+  barra de xp, y hoy nada evita que se solapen visualmente más allá de
+  que el número tiene una `FrameStrata` más alta); que
+  `GameFontNormalHuge` sea legible y el fondo se ajuste bien al texto
+  al cambiar de dígitos; que arrastrarlo y volver a entrar al juego
+  respete `LedgerDB.ratePos`; y que el guion aparezca de verdad al
+  abrir una sesión nueva y desaparezca pasado el minuto.

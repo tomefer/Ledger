@@ -125,6 +125,17 @@ function Ledger.XPBySourceAcrossSessions(sessions)
     return bySource
 end
 
+-- Sum of TotalXP (respects includeRested, see EffectiveXP) across
+-- several sessions (e.g. all of the current level's, not just the
+-- active one). Feeds the level xp/hour rate (core/rate.lua).
+function Ledger.TotalXPAcrossSessions(sessions, includeRested)
+    local total = 0
+    for _, session in ipairs(sessions) do
+        total = total + Ledger.TotalXP(session, includeRested)
+    end
+    return total
+end
+
 -- Offset of the last recorded event, or nil if there isn't one.
 function Ledger.LastOffset(session)
     local arr = session[XP_SERIES.key]
