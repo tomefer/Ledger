@@ -73,11 +73,21 @@ Interface/AddOns, apuntes viejos) es residuo del nombre anterior.
   - `/ldg export`: muestra u oculta el panel de exportación
     (`ui/export_frame.lua`), con el volcado completo de `LedgerCharDB`
     en JSON o CSV (ver "Exportación de datos" más abajo).
-- Despliegue: hay un symlink desde Interface/AddOns. Como el addon se
-  ha renombrado (carpeta y .toc pasan de `XPTrack` a `Ledger`), **hay que
-  recrear ese symlink** apuntando a la carpeta `Ledger/` — WoW exige que
-  el nombre de la carpeta coincida con el del .toc. Hecho eso, basta con
-  /reload dentro del juego.
+- Despliegue: `./deploy.sh` (raíz del repo, ejecutable desde WSL) copia
+  `Ledger/` (la carpeta del addon, nunca `spec/` ni ficheros de
+  desarrollo) a `Interface/AddOns/Ledger` dentro de la instalación de
+  WoW Classic Era, borrando el destino antes de copiar para que los
+  ficheros eliminados del repo no queden zombis. La ruta destino no
+  está hardcodeada (el repo es público): sale de la variable de
+  entorno `LEDGER_WOW_PATH` (el `Interface/AddOns` de la instalación),
+  con un valor por defecto que asume la ruta estándar de Battle.net en
+  Windows — si tu instalación vive en otro sitio, exporta
+  `LEDGER_WOW_PATH` antes de llamar al script. Aborta con un error
+  claro si esa ruta no existe. Al terminar imprime la versión del .toc
+  desplegada y la hora. **Hay que ejecutarlo tras cualquier cambio en
+  los ficheros del addon** (antes recreaba a mano un symlink desde
+  Interface/AddOns; ya no hace falta, el script sustituye ese paso
+  manual). Hecho eso, basta con /reload dentro del juego.
 
 ## Modelo de datos
 
