@@ -6,6 +6,18 @@
 
 local ADDON_NAME, Ledger = ...
 
+-- RequestTimePlayed is not essential (totalPlayed simply stays at its
+-- last known value if it never updates) and its presence across
+-- client builds is exactly the kind of thing /ldg probe exists to
+-- check -- so it's never called bare: a build where it's missing or
+-- errors just skips the refresh instead of breaking the handler that
+-- called this.
+local function SafeRequestTimePlayed()
+    if type(RequestTimePlayed) == "function" then
+        pcall(RequestTimePlayed)
+    end
+end
+
 ----------------------------------------------------------------------
 -- Combat xp patterns, built at load time from ALL of the client's real
 -- global strings whose name starts with "COMBATLOG_XPGAIN_" (never
@@ -181,7 +193,7 @@ local function CloseCurrentLevel(t)
     -- close, and a fresh request so it updates as soon as possible
     -- (TIME_PLAYED_MSG arrives asynchronously: see the dispatcher).
     LedgerCharDB.levelStartTotalPlayed = LedgerCharDB.lastKnownTotalTimePlayed or 0
-    RequestTimePlayed()
+    SafeRequestTimePlayed()
 
     timeTracker = Ledger.NewTracker(t, "idle")
     timeTracker.buckets = newSession.buckets
@@ -313,7 +325,7 @@ function Ledger.WipeCharacterData(t)
     previousXP    = UnitXP("player")
     previousMaxXP = UnitXPMax("player")
     previousLevel = UnitLevel("player")
-    RequestTimePlayed()
+    SafeRequestTimePlayed()
     Ledger.RedrawXPBarFull()
 end
 
@@ -415,7 +427,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         previousXP     = UnitXP("player")
         previousMaxXP  = UnitXPMax("player")
         previousLevel  = UnitLevel("player")
-        RequestTimePlayed()
+        SafeRequestTimePlayed()
 
     elseif event == "PLAYER_XP_UPDATE" then
         local currentXP    = UnitXP("player")

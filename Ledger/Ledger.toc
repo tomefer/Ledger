@@ -1,8 +1,8 @@
-## Interface: 11509
+## Interface: 11509, 16001
 ## Title: Ledger
 ## Notes: Experience tracking. Minimal skeleton.
 ## Author: tomef
-## Version: 0.2.1
+## Version: 0.3.0
 ## SavedVariables: LedgerDB
 ## SavedVariablesPerCharacter: LedgerCharDB
 
@@ -21,6 +21,7 @@ core/state_dump.lua
 core/xp_bar.lua
 core/time_bar.lua
 core/export.lua
+core/probe.lua
 
 ui/frame.lua
 ui/debug_frame.lua
@@ -28,5 +29,6 @@ ui/export_frame.lua
 ui/palette.lua
 ui/xp_bar.lua
 ui/time_bar.lua
+ui/probe.lua
 ui/events.lua
 ui/xp_capture.lua

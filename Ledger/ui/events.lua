@@ -109,6 +109,9 @@ SlashCmdList["LEDGER"] = function(msg)
     elseif command == "export" then
         Ledger.ToggleExportFrame()
 
+    elseif command == "probe" then
+        Print(Ledger.FormatProbe(Ledger.GatherProbeData()))
+
     elseif command == "wipe" then
         if args[1] == "confirm" then
             Ledger.WipeCharacterData(GetTime())

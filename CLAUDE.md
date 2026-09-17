@@ -1,14 +1,26 @@
 # Ledger
 
-Addon de WoW Classic Era (cliente 1.15.x, Lua 5.1). Se llamaba XPTrack;
+Addon de la línea de producto Classic (Lua 5.1). Se llamaba XPTrack;
 renombrado a Ledger — si ves "XPTrack" en algún sitio (código, symlink de
 Interface/AddOns, apuntes viejos) es residuo del nombre anterior.
 
+**Multi-cliente desde 2026-09-17**: un solo paquete (`## Interface:
+11509, 16001` en `Ledger.toc`, nunca TOCs separados por flavor) sirve
+tanto a Classic Era (cliente 1.15.x, interface 11509) como a la beta de
+WoW Forever (build 1.60.1, interface 16001, también línea Classic). No
+se asume que ninguna API se comporte igual en ambos: `/ldg probe` (ver
+más abajo) existe precisamente para comprobarlo en el cliente real en
+vez de suponer.
+
 ## Restricciones
 - Lua 5.1. Sin goto, sin operadores bitwise nativos, sin // .
-- API de Classic Era únicamente. NADA de retail moderno.
+- API de la línea de producto Classic únicamente. NADA de retail
+  moderno. Con dos clientes en el mismo paquete (ver arriba), esto
+  aplica a los dos: nada que solo exista en uno de ellos sin comprobar
+  antes con `/ldg probe` que el otro también lo tiene.
 - Sin librerías externas. Nada de Ace3.
-- Si no sabes si una API existe en Classic Era, pregunta en vez de asumir.
+- Si no sabes si una API existe en un cliente dado, pregunta o
+  compruébalo con `/ldg probe` en vez de asumir.
 
 ## Arquitectura
 - `Ledger/core/` — lógica pura. NO puede referenciar ninguna API de WoW.
@@ -73,19 +85,32 @@ Interface/AddOns, apuntes viejos) es residuo del nombre anterior.
   - `/ldg export`: muestra u oculta el panel de exportación
     (`ui/export_frame.lua`), con el volcado completo de `LedgerCharDB`
     en JSON o CSV (ver "Exportación de datos" más abajo).
-- Despliegue: `./deploy.sh` (raíz del repo, ejecutable desde WSL) copia
-  `Ledger/` (la carpeta del addon, nunca `spec/` ni ficheros de
-  desarrollo) a `Interface/AddOns/Ledger` dentro de la instalación de
-  WoW Classic Era, borrando el destino antes de copiar para que los
-  ficheros eliminados del repo no queden zombis. La ruta destino no
-  está hardcodeada (el repo es público): sale de la variable de
-  entorno `LEDGER_WOW_PATH` (el `Interface/AddOns` de la instalación),
-  con un valor por defecto que asume la ruta estándar de Battle.net en
-  Windows — si tu instalación vive en otro sitio, exporta
-  `LEDGER_WOW_PATH` antes de llamar al script. Aborta con un error
-  claro si esa ruta no existe. Al terminar imprime la versión del .toc
-  desplegada y la hora. **Hay que ejecutarlo tras cualquier cambio en
-  los ficheros del addon** (antes recreaba a mano un symlink desde
+  - `/ldg probe`: imprime al chat un diagnóstico de compatibilidad del
+    cliente actual — versión de build/interface, presencia y valor de
+    un puñado de APIs, cuántos global strings `COMBATLOG_XPGAIN_*`
+    encuentra y si existe `C_ChatInfo` (ver "Diagnóstico de
+    compatibilidad" más abajo). Nunca aborta por una API ausente.
+- Despliegue: `./deploy.sh [flavor]` (raíz del repo, ejecutable desde
+  WSL) copia `Ledger/` (la carpeta del addon, nunca `spec/` ni
+  ficheros de desarrollo) a `Interface/AddOns/Ledger` dentro de la
+  instalación de WoW, borrando el destino antes de copiar para que los
+  ficheros eliminados del repo no queden zombis. `flavor` es
+  `classic_era` (por defecto) o `forever`; cada uno resuelve a su
+  propia subcarpeta bajo la raíz de la instalación (`_classic_era_` /
+  `_classic_beta_` — este último es el nombre real de la carpeta de la
+  beta de WoW Forever en esta máquina, confirmado, no adivinado).
+  `LEDGER_WOW_PATH` apunta a esa **raíz** de la instalación de WoW (la
+  carpeta que contiene `_classic_era_`, `_classic_beta_`, etc.), nunca
+  a una ruta completa hasta `Interface/AddOns` — es el flavor quien
+  decide ese último tramo. La ruta no está hardcodeada a esta máquina
+  (el repo es público): tiene un valor por defecto que asume la ruta
+  estándar de Battle.net en Windows, y se puede sobrescribir
+  exportando `LEDGER_WOW_PATH` si la instalación vive en otro sitio.
+  Aborta con un error claro si esa ruta no existe, o si `flavor` no es
+  uno de los conocidos. Al terminar imprime la versión del .toc
+  desplegada y la hora. **Hay que ejecutarlo (con el flavor que toque)
+  tras cualquier cambio en los ficheros del addon** (antes recreaba a
+  mano un symlink desde
   Interface/AddOns; ya no hace falta, el script sustituye ese paso
   manual). Hecho eso, basta con /reload dentro del juego.
 
@@ -848,6 +873,68 @@ operativo); y que un volcado real por encima de
 `Ledger.EXPORT_MAX_EVENTS` no note tirón alguno al pintarse en el
 EditBox.
 
+### Diagnóstico de compatibilidad (`core/probe.lua` + `ui/probe.lua`, `/ldg probe`)
+
+Con dos clientes distintos sirviendo desde el mismo paquete (ver
+"Multi-cliente" arriba), `/ldg probe` es la herramienta para comprobar
+en el cliente real, de golpe, qué API está disponible y con qué forma
+— en vez de suponer que Classic Era y WoW Forever se comportan igual.
+Nunca aborta: cada comprobación está aislada, así que una API ausente
+o que casca al llamarla no impide ver el resto del informe.
+
+- **Reparto core/ui, mismo patrón que `core/state_dump.lua`**:
+  `ui/probe.lua: Ledger.GatherProbeData()` es la única pieza que toca
+  APIs de WoW — cada llamada opcional pasa por `pcall`, nunca a pelo —
+  y devuelve una tabla plana; `core/probe.lua: Ledger.FormatProbe(data)`
+  es lógica pura que solo formatea esa tabla a texto, testeada con
+  datos fabricados a mano (`spec/probe_spec.lua`), sin ninguna API de
+  WoW de por medio.
+- **`GetBuildInfo`**: versión, build, fecha y `tocversion` del cliente
+  real en ejecución — la comprobación más directa de si un `/reload`
+  está corriendo sobre Classic Era o sobre WoW Forever.
+- **APIs concretas probadas** (`UnitXP`, `UnitXPMax`, `GetXPExhaustion`,
+  `RequestTimePlayed`, `UnitOnTaxi`, `GetUnitSpeed`, orden fijo): cada
+  una se marca `absent` si el global no es una función, o si lo es, se
+  llama con `pcall` (con `"player"` como único argumento las que lo
+  necesitan) y se marca `present, value = ...` con cada valor devuelto
+  (`tostring` de cada uno, recortando los `nil` finales — así
+  `RequestTimePlayed`, que no devuelve nada, sale como "no return
+  value" en vez de una fila de `nil`s) o `present, call failed (...)`
+  si `pcall` atrapó un error. `UnitOnTaxi`/`GetUnitSpeed` no los usa
+  hoy ningún otro fichero: se prueban de cara a mejorar en el futuro la
+  detección del bucket `"travel"` (hoy solo por el temporizador de
+  inactividad, ver "Buckets de tiempo" arriba) sin comprometerse a
+  usarlos todavía.
+- **Global strings `COMBATLOG_XPGAIN_*`**: cuenta y lista TODOS los
+  globales de texto con ese prefijo, las dos familias a la vez (los
+  patrones base de kill/explore y los de `EXHAUSTION` del bono por
+  descanso — ver "Captura de eventos" arriba, que sí las separa para su
+  propia lógica; aquí solo interesa el inventario crudo).
+- **`C_ChatInfo`**: presencia simple (`C_ChatInfo ~= nil`), sin llamar a
+  nada dentro — no se usa en ningún sitio del addon todavía, se prueba
+  como referencia de cara a un futuro filtrado de canal de chat.
+
+**Degradación con gracia fuera del propio probe**: `RequestTimePlayed`
+(el único de los API arriba con un punto de llamada real, en
+`ui/xp_capture.lua`, aparte del probe) nunca se llama a pelo —
+`SafeRequestTimePlayed()` (local a ese fichero) comprueba que es una
+función antes de llamarla y envuelve la llamada en `pcall`. Si falta o
+casca en un cliente dado, `lastKnownTotalTimePlayed` simplemente se
+queda en su último valor conocido en vez de refrescarse — no hay
+ninguna otra `RequestTimePlayed()` suelta en el resto del código.
+`UnitXP`/`UnitXPMax` (el resto de lo listado en `/ldg probe` con un uso
+real) se quedan sin envolver a propósito: son el núcleo del addon, no
+hay ningún modo degradado con sentido si no existen — si un cliente no
+las tiene, el addon simplemente no puede rastrear xp en él, y eso es
+justo lo que `/ldg probe` debe dejar ver, no ocultar.
+
+**Pendiente de verificar en el juego** (nunca probado, ni contra
+Classic Era ni contra WoW Forever): que `/ldg probe` corra sin errores
+en ambos clientes y que sus resultados reales confirmen (o desmientan)
+los supuestos que ya hace el resto del addon sobre `UnitXP`,
+`GetXPExhaustion`/el bono por descanso vía mensaje de chat, y los
+global strings `COMBATLOG_XPGAIN_*` en interface 16001.
+
 ### Sistema de log (`core/log.lua`)
 
 Estado en memoria (no persistido, igual que el tracker de buckets y el
@@ -1079,3 +1166,12 @@ falta en el `.toc`).
   texto realmente seleccionado y que Ctrl+C lo copie al portapapeles
   del sistema, y que un volcado real por encima de
   `Ledger.EXPORT_MAX_EVENTS` no note tirón alguno al pintarse.
+- Correr `/ldg probe` en el cliente real de WoW Forever (build 1.60.1,
+  interface 16001) y en Classic Era, y comparar: ver "Diagnóstico de
+  compatibilidad" arriba para qué comprueba y por qué nada de esto se
+  puede confirmar sin el cliente de verdad. Si algo sale distinto entre
+  los dos (`GetXPExhaustion` en vez del parseo de chat para el bono por
+  descanso, otro nombre de global string, `UnitOnTaxi`/`GetUnitSpeed`
+  con otra forma), decidir entonces si conviene ramificar algún camino
+  del addon por versión de interface — hoy no hay ninguna rama de ese
+  tipo en ningún sitio.
