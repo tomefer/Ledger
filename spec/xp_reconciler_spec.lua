@@ -6,12 +6,12 @@ describe("core/xp_reconciler.lua", function()
         assert(loadfile("Ledger/core/xp_reconciler.lua"))("Ledger", Ledger)
     end)
 
-    it("empieza sin descuadre", function()
+    it("starts with no gap", function()
         local r = Ledger.NewReconciler()
         assert.are.equal(0, Ledger.ReconciliationGap(r))
     end)
 
-    it("se mantiene a cero cuando lo esperado y lo grabado coinciden", function()
+    it("stays at zero when expected and recorded match", function()
         local r = Ledger.NewReconciler()
         Ledger.AccountExpectedXP(r, 270)
         Ledger.AccountRecordedXP(r, 270)
@@ -19,27 +19,27 @@ describe("core/xp_reconciler.lua", function()
         assert.are.equal(0, Ledger.ReconciliationGap(r))
     end)
 
-    it("detecta el descuadre del bug de subida de nivel: xp esperada que nunca llega a grabarse", function()
+    it("detects the level-up bug's gap: expected xp that never gets recorded", function()
         local r = Ledger.NewReconciler()
-        -- El caso real: un delta de xp valido (270, ya corregido por
-        -- core/xp_delta.lua) que un bug descarta antes de grabarse.
+        -- The real case: a valid xp delta (270, already corrected by
+        -- core/xp_delta.lua) that a bug discards before it gets recorded.
         Ledger.AccountExpectedXP(r, 270)
 
         assert.are.equal(270, Ledger.ReconciliationGap(r))
     end)
 
-    it("acumula el hueco a lo largo de varios eventos, no solo el ultimo", function()
+    it("accumulates the gap across several events, not just the last one", function()
         local r = Ledger.NewReconciler()
         Ledger.AccountExpectedXP(r, 100)
         Ledger.AccountRecordedXP(r, 100)
-        Ledger.AccountExpectedXP(r, 50) -- este se pierde
+        Ledger.AccountExpectedXP(r, 50) -- this one gets lost
         Ledger.AccountExpectedXP(r, 30)
         Ledger.AccountRecordedXP(r, 30)
 
         assert.are.equal(50, Ledger.ReconciliationGap(r))
     end)
 
-    it("un exceso de xp grabada (mas de la esperada) tambien se refleja, en negativo", function()
+    it("an excess of recorded xp (more than expected) also shows up, negative", function()
         local r = Ledger.NewReconciler()
         Ledger.AccountExpectedXP(r, 50)
         Ledger.AccountRecordedXP(r, 80)

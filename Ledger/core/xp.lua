@@ -46,7 +46,7 @@ local function MigrateSessionXPSeries(session)
     end
 end
 
--- v4 -> v5, three changes in the same pass over each session (Real
+-- v4 -> v5, two changes in the same pass over each session (Real
 -- SavedVariables analysis):
 --   1) off sometimes carried floating-point rounding decimals
 --      ((GetTime()-t0)*10 doesn't always land on an integer); rounded
@@ -55,15 +55,8 @@ end
 --      (Ledger.SRC_IDS, core/series.lua): more compact and stable
 --      against name changes. All code outside the persistence
 --      boundary keeps using the text name.
---   3) the nivel field is renamed to level (the rest of the schema was
---      already in English).
--- None of the three loses any information: everything is rewritten in
--- place.
+-- Neither one loses any information: everything is rewritten in place.
 local function MigrateSessionToV5(session)
-    if session.nivel ~= nil and session.level == nil then
-        session.level = session.nivel
-        session.nivel = nil
-    end
     session.deaths = session.deaths or 0
 
     local xpSeries = Ledger.SERIES.xp
@@ -101,7 +94,7 @@ function Ledger.MigrateDB(db)
     if version < 3 then
         -- v2 -> v3: the xp series goes from stride 3 (off, xp, src) to
         -- stride 4 (off, xp, src, rested), to split the rested bonus
-        -- from the base xp. levels[nivel] needs no separate migration:
+        -- from the base xp. levels[level] needs no separate migration:
         -- level close wasn't wired up in-game yet at this point (see
         -- CLAUDE.md), so there are no curves or totals persisted under
         -- the old schema to translate.
@@ -132,15 +125,14 @@ function Ledger.MigrateDB(db)
     end
 
     if version < 5 then
-        -- v4 -> v5: see MigrateSessionToV5. Also renames nivel->level
-        -- on already-closed levels entries and fills deaths/reached
-        -- with 0 if missing (no way to reconstruct them
-        -- retroactively, same as rested=0 in v2->v3). t0 remains
-        -- GetTime() (client uptime, not absolute) on already-existing
-        -- sessions: there's no way to translate it retroactively to
-        -- an absolute time() once the correspondence between the two
-        -- clocks is lost; only sessions created from this version on
-        -- use time().
+        -- v4 -> v5: see MigrateSessionToV5. Also fills deaths/reached
+        -- with 0 on already-closed levels entries if missing (no way
+        -- to reconstruct them retroactively, same as rested=0 in
+        -- v2->v3). t0 remains GetTime() (client uptime, not absolute)
+        -- on already-existing sessions: there's no way to translate it
+        -- retroactively to an absolute time() once the correspondence
+        -- between the two clocks is lost; only sessions created from
+        -- this version on use time().
         if db.sessions then
             for _, session in ipairs(db.sessions) do
                 MigrateSessionToV5(session)
@@ -148,10 +140,6 @@ function Ledger.MigrateDB(db)
         end
         if db.levels then
             for _, entry in pairs(db.levels) do
-                if entry.nivel ~= nil and entry.level == nil then
-                    entry.level = entry.nivel
-                    entry.nivel = nil
-                end
                 entry.deaths  = entry.deaths or 0
                 entry.reached = entry.reached or 0
             end

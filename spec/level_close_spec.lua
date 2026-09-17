@@ -9,8 +9,8 @@ describe("core/level_close.lua", function()
         assert(loadfile("Ledger/core/level_close.lua"))("Ledger", Ledger)
     end)
 
-    describe("nivel de una sola sesion", function()
-        it("agrega totales, desglose y curva de esa sesion", function()
+    describe("single-session level", function()
+        it("aggregates that session's totals, breakdown and curve", function()
             local s = Ledger.NewSession(1000, 10)
             Ledger.AddEvent(s, 0, 50, "kill")
             Ledger.AddEvent(s, 300, 20, "quest")
@@ -26,8 +26,8 @@ describe("core/level_close.lua", function()
         end)
     end)
 
-    describe("nivel que abarca varias sesiones", function()
-        it("agrega y funde la curva de todas las sesiones del nivel", function()
+    describe("level spanning several sessions", function()
+        it("aggregates and merges the curve of all the level's sessions", function()
             local a = Ledger.NewSession(0, 20)
             Ledger.AddEvent(a, 0, 10, "kill")
             Ledger.AddEvent(a, 650, 5, "quest")
@@ -42,20 +42,20 @@ describe("core/level_close.lua", function()
             assert.are.equal(43, entry.totalXP)
             assert.are.equal(900, entry.totalPlayed)
             assert.are.same({ kill = 30, quest = 13 }, entry.bySource)
-            -- minuto 1: 10 (a) + 20 (b); minuto 2: 5 (a); minuto 3: 8 (b)
+            -- minute 1: 10 (a) + 20 (b); minute 2: 5 (a); minute 3: 8 (b)
             assert.are.same({ 30, 5, 8 }, entry.curve)
         end)
     end)
 
-    describe("sesion que abarca dos niveles", function()
-        it("agrega cada trozo por separado sin mezclar ni perder eventos", function()
-            -- Una sesion real que dinga a mitad de partida se le pasa a
-            -- esta funcion ya trocasteada por quien llama: un cierre de
-            -- nivel por cada mitad de su array de eventos.
+    describe("session spanning two levels", function()
+        it("aggregates each piece separately without mixing or losing events", function()
+            -- A real session that dings mid-game is passed to this
+            -- function already pre-split by the caller: one level
+            -- close per half of its events array.
             local level5 = Ledger.NewSession(2000, 5)
             Ledger.AddEvent(level5, 0, 80, "kill")
             Ledger.AddEvent(level5, 200, 40, "quest")
-            Ledger.AddEvent(level5, 250, 1, "kill")   -- golpe que hace ding
+            Ledger.AddEvent(level5, 250, 1, "kill")   -- the hit that dings
 
             local level6 = Ledger.NewSession(2000, 6)
             Ledger.AddEvent(level6, 300, 60, "kill")
@@ -74,13 +74,13 @@ describe("core/level_close.lua", function()
             assert.are.same({ kill = 60, quest = 30 }, entry6.bySource)
             assert.are.same({ 60, 30 }, entry6.curve)
 
-            -- Ni se pierde ni se duplica xp al trocear la sesion original.
+            -- No xp is lost or duplicated when splitting the original session.
             assert.are.equal(80 + 40 + 1 + 60 + 30, entry5.totalXP + entry6.totalXP)
         end)
     end)
 
     describe("totalRested", function()
-        it("acumula el bono por descanso de todas las sesiones del nivel", function()
+        it("accumulates the rested bonus across all the level's sessions", function()
             local a = Ledger.NewSession(0, 15)
             Ledger.AddEvent(a, 0, 172, "kill", 86)
             Ledger.AddEvent(a, 300, 50, "quest")
@@ -91,12 +91,12 @@ describe("core/level_close.lua", function()
             local entry = Ledger.CloseLevel({ a, b }, 900)
 
             assert.are.equal(106, entry.totalRested)
-            -- totalXP nunca descuenta el bono por si solo (includeRested
-            -- por defecto es true).
+            -- totalXP never subtracts the bonus on its own (includeRested
+            -- defaults to true).
             assert.are.equal(282, entry.totalXP)
         end)
 
-        it("es cero cuando ningun evento trajo bono", function()
+        it("is zero when no event carried a bonus", function()
             local s = Ledger.NewSession(0, 3)
             Ledger.AddEvent(s, 0, 40, "kill")
 
@@ -106,11 +106,11 @@ describe("core/level_close.lua", function()
         end)
     end)
 
-    describe("CloseLevel con el toggle includeRested", function()
-        it("con includeRested=false, totalXP y curve descuentan el bono, totalRested no cambia", function()
+    describe("CloseLevel with the includeRested toggle", function()
+        it("with includeRested=false, totalXP and curve subtract the bonus, totalRested doesn't change", function()
             local s = Ledger.NewSession(0, 8)
-            Ledger.AddEvent(s, 0, 172, "kill", 86)   -- minuto 1
-            Ledger.AddEvent(s, 650, 50, "quest")     -- minuto 2
+            Ledger.AddEvent(s, 0, 172, "kill", 86)   -- minute 1
+            Ledger.AddEvent(s, 650, 50, "quest")     -- minute 2
 
             local entryTrue  = Ledger.CloseLevel({ s }, 120, true)
             local entryFalse = Ledger.CloseLevel({ s }, 120, false)
@@ -121,14 +121,14 @@ describe("core/level_close.lua", function()
             assert.are.equal(136, entryFalse.totalXP)
             assert.are.same({ 86, 50 }, entryFalse.curve)
 
-            -- El bono acumulado real es el mismo independientemente del
-            -- toggle: el toggle solo afecta al calculo, nunca a lo
-            -- grabado.
+            -- The real accumulated bonus is the same regardless of the
+            -- toggle: the toggle only affects the calculation, never
+            -- what gets recorded.
             assert.are.equal(86, entryTrue.totalRested)
             assert.are.equal(86, entryFalse.totalRested)
         end)
 
-        it("bySource nunca cambia con el toggle: sigue siendo la xp total tal cual", function()
+        it("bySource never changes with the toggle: it stays the total xp as-is", function()
             local s = Ledger.NewSession(0, 8)
             Ledger.AddEvent(s, 0, 172, "kill", 86)
 
@@ -140,8 +140,8 @@ describe("core/level_close.lua", function()
         end)
     end)
 
-    describe("nivel sin eventos", function()
-        it("devuelve totales a cero y curva vacia sin romper", function()
+    describe("level with no events", function()
+        it("returns zeroed totals and an empty curve without breaking", function()
             local s = Ledger.NewSession(3000, 42)
 
             local entry = Ledger.CloseLevel({ s }, 45)
@@ -155,8 +155,8 @@ describe("core/level_close.lua", function()
         end)
     end)
 
-    describe("buckets de tiempo", function()
-        it("suma los buckets de todas las sesiones del nivel", function()
+    describe("time buckets", function()
+        it("sums the buckets across all the level's sessions", function()
             local a = Ledger.NewSession(0, 7)
             a.buckets = { active = 100, idle = 20, travel = 30, dead = 0 }
 
@@ -168,7 +168,7 @@ describe("core/level_close.lua", function()
             assert.are.same({ active = 140, idle = 30, travel = 30, dead = 15 }, entry.buckets)
         end)
 
-        it("una sesion sin buckets (esquema viejo antes de migrar) no revienta", function()
+        it("a session with no buckets (old schema before migrating) doesn't blow up", function()
             local a = Ledger.NewSession(0, 7)
             a.buckets = nil
             local b = Ledger.NewSession(5000, 7)
@@ -181,7 +181,7 @@ describe("core/level_close.lua", function()
     end)
 
     describe("deaths", function()
-        it("suma las muertes de todas las sesiones del nivel", function()
+        it("sums the deaths across all the level's sessions", function()
             local a = Ledger.NewSession(0, 7)
             a.deaths = 2
             local b = Ledger.NewSession(5000, 7)
@@ -192,7 +192,7 @@ describe("core/level_close.lua", function()
             assert.are.equal(3, entry.deaths)
         end)
 
-        it("es 0 si ninguna sesion murio (deaths ya viene a 0 por NewSession)", function()
+        it("is 0 if no session died (deaths already defaults to 0 via NewSession)", function()
             local s = Ledger.NewSession(0, 7)
 
             local entry = Ledger.CloseLevel({ s }, 10)
@@ -202,7 +202,7 @@ describe("core/level_close.lua", function()
     end)
 
     describe("reached", function()
-        it("toma el reached de la primera sesion del nivel", function()
+        it("takes the reached from the level's first session", function()
             local a = Ledger.NewSession(0, 7)
             a.reached = 1758000000
             local b = Ledger.NewSession(5000, 7)
@@ -212,7 +212,7 @@ describe("core/level_close.lua", function()
             assert.are.equal(1758000000, entry.reached)
         end)
 
-        it("es 0 si la sesion no trae reached (esquema viejo antes de migrar)", function()
+        it("is 0 if the session carries no reached (old schema before migrating)", function()
             local s = Ledger.NewSession(0, 7)
 
             local entry = Ledger.CloseLevel({ s }, 10)
@@ -222,7 +222,7 @@ describe("core/level_close.lua", function()
     end)
 
     describe("RecordLevelClose", function()
-        it("crea db.levels si no existe y escribe la entrada por nivel", function()
+        it("creates db.levels if missing and writes the per-level entry", function()
             local db = {}
             local entry = { level = 7, totalXP = 300 }
 
@@ -231,7 +231,7 @@ describe("core/level_close.lua", function()
             assert.are.same({ [7] = entry }, db.levels)
         end)
 
-        it("no pisa entradas de otros niveles ya guardadas", function()
+        it("doesn't overwrite already-saved entries of other levels", function()
             local db = { levels = { [3] = { level = 3, totalXP = 10 } } }
             local entry = { level = 4, totalXP = 20 }
 

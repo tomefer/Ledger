@@ -9,12 +9,12 @@ describe("core/time_bar.lua", function()
     end)
 
     describe("ComputeTimeBarSegments", function()
-        it("con total 0 no hay segmentos", function()
+        it("with total 0 there are no segments", function()
             local segments = Ledger.ComputeTimeBarSegments({ active = 0, travel = 0, idle = 0, dead = 0 }, 200)
             assert.are.same({}, segments)
         end)
 
-        it("reparte proporcionalmente y respeta el orden fijo active/travel/idle/dead", function()
+        it("splits proportionally and respects the fixed active/travel/idle/dead order", function()
             local buckets = { active = 50, travel = 20, idle = 20, dead = 10 }
             local segments = Ledger.ComputeTimeBarSegments(buckets, 100)
 
@@ -30,8 +30,8 @@ describe("core/time_bar.lua", function()
             assert.are.equal(10, segments[4].width)
         end)
 
-        it("mantiene el orden fijo aunque el bucket mas grande sea otro distinto de active", function()
-            -- dead es el mayor, pero debe seguir apareciendo el ultimo.
+        it("keeps the fixed order even when the largest bucket isn't active", function()
+            -- dead is the largest, but it must still show up last.
             local buckets = { active = 5, travel = 5, idle = 5, dead = 85 }
             local segments = Ledger.ComputeTimeBarSegments(buckets, 100)
 
@@ -39,7 +39,7 @@ describe("core/time_bar.lua", function()
                 { segments[1].bucket, segments[2].bucket, segments[3].bucket, segments[4].bucket })
         end)
 
-        it("los offsets son acumulativos y contiguos", function()
+        it("offsets are cumulative and contiguous", function()
             local buckets = { active = 50, travel = 20, idle = 20, dead = 10 }
             local segments = Ledger.ComputeTimeBarSegments(buckets, 100)
 
@@ -49,7 +49,7 @@ describe("core/time_bar.lua", function()
             assert.are.equal(90, segments[4].offset)
         end)
 
-        it("la suma de anchuras nunca supera el ancho total, incluso con reparto no exacto", function()
+        it("the sum of widths never exceeds the total width, even with an inexact split", function()
             local buckets = { active = 1, travel = 1, idle = 1, dead = 0 }
             local segments = Ledger.ComputeTimeBarSegments(buckets, 10)
 
@@ -62,25 +62,25 @@ describe("core/time_bar.lua", function()
     end)
 
     describe("FormatHHMMSS", function()
-        it("cero segundos", function()
+        it("zero seconds", function()
             assert.are.equal("00:00:00", Ledger.FormatHHMMSS(0))
         end)
 
-        it("menos de un minuto", function()
+        it("less than a minute", function()
             assert.are.equal("00:00:45", Ledger.FormatHHMMSS(45))
         end)
 
-        it("justo una hora", function()
+        it("exactly one hour", function()
             assert.are.equal("01:00:00", Ledger.FormatHHMMSS(3600))
         end)
 
-        it("mas de una hora", function()
+        it("more than an hour", function()
             assert.are.equal("02:05:09", Ledger.FormatHHMMSS(2 * 3600 + 5 * 60 + 9))
         end)
     end)
 
     describe("FormatTimeBarTooltip", function()
-        it("una linea por bucket, en el orden fijo, con hh:mm:ss y porcentaje", function()
+        it("one line per bucket, in the fixed order, with hh:mm:ss and percentage", function()
             local buckets = { active = 3600, travel = 1800, idle = 0, dead = 0 }
             local lines = Ledger.FormatTimeBarTooltip(buckets)
 
@@ -93,7 +93,7 @@ describe("core/time_bar.lua", function()
             assert.is_not_nil(lines[2].text:find("33.3%", 1, true))
         end)
 
-        it("con el total a 0 no revienta y da 0%", function()
+        it("with the total at 0 doesn't blow up and gives 0%", function()
             local lines = Ledger.FormatTimeBarTooltip({ active = 0, travel = 0, idle = 0, dead = 0 })
 
             for _, line in ipairs(lines) do

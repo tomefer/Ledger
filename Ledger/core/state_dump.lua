@@ -58,19 +58,19 @@ Ledger.FormatSession = FormatSession
 
 -- Summary of already-closed levels (levels[level] = CloseLevel(...)).
 local function FormatLevels(levels)
-    local niveles = {}
-    for nivel in pairs(levels or {}) do
-        table.insert(niveles, nivel)
+    local levelNumbers = {}
+    for level in pairs(levels or {}) do
+        table.insert(levelNumbers, level)
     end
-    table.sort(niveles)
+    table.sort(levelNumbers)
 
-    if #niveles == 0 then
+    if #levelNumbers == 0 then
         return "Closed levels: none"
     end
 
     local lines = { "Closed levels:" }
-    for _, nivel in ipairs(niveles) do
-        local entry = levels[nivel]
+    for _, level in ipairs(levelNumbers) do
+        local entry = levels[level]
         table.insert(lines, string.format("  level %s: xp=%d, rested=%d, time=%ds, deaths=%d",
             tostring(entry.level), entry.totalXP, entry.totalRested or 0, entry.totalPlayed, entry.deaths or 0))
     end

@@ -6,32 +6,32 @@ describe("core/series.lua", function()
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
     end)
 
-    it("declara la serie xp tal y como la usa core/events.lua", function()
+    it("declares the xp series exactly as core/events.lua uses it", function()
         assert.are.same({ key = "e", stride = 4, fields = { "off", "xp", "src", "rested" } }, Ledger.SERIES.xp)
     end)
 
     describe("SeriesFieldIndex", function()
-        it("encuentra el indice de un campo declarado", function()
+        it("finds the index of a declared field", function()
             local seriesDef = { key = "e", stride = 3, fields = { "off", "xp", "src" } }
 
             assert.are.equal(1, Ledger.SeriesFieldIndex(seriesDef, "off"))
             assert.are.equal(3, Ledger.SeriesFieldIndex(seriesDef, "src"))
         end)
 
-        it("devuelve nil para un campo que no existe", function()
+        it("returns nil for a field that doesn't exist", function()
             local seriesDef = { key = "e", stride = 3, fields = { "off", "xp", "src" } }
 
             assert.is_nil(Ledger.SeriesFieldIndex(seriesDef, "faction"))
         end)
     end)
 
-    -- Dos series de prueba con stride distinto, para comprobar que los
-    -- helpers no dan por hecho 3 campos en ningun sitio.
+    -- Two test series with different strides, to check that the
+    -- helpers never assume 3 fields anywhere.
     local stride3 = { key = "g", stride = 3, fields = { "off", "amount", "src" } }
     local stride4 = { key = "r", stride = 4, fields = { "off", "amount", "faction", "standing" } }
 
-    describe("lectura y escritura con stride 3", function()
-        it("anade, cuenta y lee registros correctamente", function()
+    describe("reading and writing with stride 3", function()
+        it("appends, counts and reads records correctly", function()
             local session = {}
 
             Ledger.AppendRecord(session, stride3, 10, 5, "kill")
@@ -45,8 +45,8 @@ describe("core/series.lua", function()
         end)
     end)
 
-    describe("lectura y escritura con stride 4", function()
-        it("anade, cuenta y lee registros correctamente", function()
+    describe("reading and writing with stride 4", function()
+        it("appends, counts and reads records correctly", function()
             local session = {}
 
             Ledger.AppendRecord(session, stride4, 10, 50, "Orgrimmar", "honored")
@@ -69,8 +69,8 @@ describe("core/series.lua", function()
         end)
     end)
 
-    describe("sesion sin ningun registro todavia", function()
-        it("cuenta cero y no revienta al leer", function()
+    describe("session with no records yet", function()
+        it("counts zero and doesn't blow up when reading", function()
             local session = {}
 
             assert.are.equal(0, Ledger.RecordCount(session, stride4))
@@ -79,7 +79,7 @@ describe("core/series.lua", function()
     end)
 
     describe("ConcatSeries", function()
-        it("concatena el array plano de varias sesiones en orden", function()
+        it("concatenates the flat array of several sessions in order", function()
             local a, b = {}, {}
             Ledger.AppendRecord(a, stride3, 10, 5, "kill")
             Ledger.AppendRecord(b, stride3, 20, 8, "quest")
@@ -90,7 +90,7 @@ describe("core/series.lua", function()
             assert.are.same({ 10, 5, "kill", 20, 8, "quest", 30, 2, "kill" }, combined)
         end)
 
-        it("ignora sesiones sin ningun registro de esa serie", function()
+        it("ignores sessions with no records of that series", function()
             local a, b = {}, {}
             Ledger.AppendRecord(b, stride3, 10, 5, "kill")
 
@@ -99,7 +99,7 @@ describe("core/series.lua", function()
             assert.are.same({ 10, 5, "kill" }, combined)
         end)
 
-        it("con una lista de sesiones vacia devuelve un array vacio", function()
+        it("with an empty session list returns an empty array", function()
             assert.are.same({}, Ledger.ConcatSeries({}, stride3))
         end)
     end)

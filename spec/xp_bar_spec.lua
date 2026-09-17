@@ -7,12 +7,12 @@ describe("core/xp_bar.lua", function()
         assert(loadfile("Ledger/core/xp_bar.lua"))("Ledger", Ledger)
     end)
 
-    -- Construye el array plano de la serie xp a partir de una lista de
-    -- {xp=, src=, rested=} (off no importa para la barra, siempre 0).
-    -- src se traduce a su ID numerico (Ledger.SRC_IDS): es el formato en
-    -- el que vive de verdad dentro del array (ver core/events.lua:
-    -- AddEvent); ComputeBarSegments lo traduce de vuelta a texto al
-    -- leerlo (core/xp_bar.lua: MergeConsecutive).
+    -- Builds the xp series' flat array from a list of
+    -- {xp=, src=, rested=} (off doesn't matter for the bar, always 0).
+    -- src is translated to its numeric ID (Ledger.SRC_IDS): that's the
+    -- format it really lives in inside the array (see core/events.lua:
+    -- AddEvent); ComputeBarSegments translates it back to text when
+    -- reading it (core/xp_bar.lua: MergeConsecutive).
     local function events(list)
         local arr = {}
         for _, e in ipairs(list) do
@@ -24,20 +24,20 @@ describe("core/xp_bar.lua", function()
         return arr
     end
 
-    describe("array vacio", function()
-        it("sin eventos ni xp previa no hay segmentos", function()
+    describe("empty array", function()
+        it("with no events or prior xp there are no segments", function()
             local segments = Ledger.ComputeBarSegments({}, 0, 200, 1000)
             assert.are.same({}, segments)
         end)
 
-        it("con maxXP a 0 tampoco (evita dividir por cero)", function()
+        it("nor with maxXP at 0 (avoids dividing by zero)", function()
             local segments = Ledger.ComputeBarSegments(events({ { xp = 10, src = "kill" } }), 0, 200, 0)
             assert.are.same({}, segments)
         end)
     end)
 
-    describe("un evento", function()
-        it("un unico segmento con la anchura proporcional", function()
+    describe("one event", function()
+        it("a single segment with proportional width", function()
             local arr = events({ { xp = 500, src = "kill" } })
             local segments = Ledger.ComputeBarSegments(arr, 0, 200, 1000)
 
@@ -46,8 +46,8 @@ describe("core/xp_bar.lua", function()
         end)
     end)
 
-    describe("varios eventos del mismo src", function()
-        it("se fusionan en un solo segmento sumando xp", function()
+    describe("several events with the same src", function()
+        it("merge into a single segment, summing xp", function()
             local arr = events({
                 { xp = 100, src = "kill" },
                 { xp = 150, src = "kill" },
@@ -59,14 +59,13 @@ describe("core/xp_bar.lua", function()
             assert.are.equal(60, segments[1].width) -- (300/1000)*200
         end)
 
-        it("suma tambien el rested al fusionar", function()
+        it("also sums rested when merging", function()
             local arr = events({
                 { xp = 100, src = "kill", rested = 20 },
                 { xp = 50,  src = "kill", rested = 10 },
             })
-            -- Escala 1:1 (widthPx = maxXP) para que la anchura en
-            -- pixeles coincida exactamente con la xp: xp total 150,
-            -- rested total 30.
+            -- 1:1 scale (widthPx = maxXP) so the width in pixels matches
+            -- the xp exactly: total xp 150, total rested 30.
             local segments = Ledger.ComputeBarSegments(arr, 0, 1000, 1000)
 
             assert.are.equal(150, segments[1].width)
@@ -74,8 +73,8 @@ describe("core/xp_bar.lua", function()
         end)
     end)
 
-    describe("src alternos", function()
-        it("no fusiona eventos de distinto src, aunque un mismo src reaparezca despues", function()
+    describe("alternating src", function()
+        it("doesn't merge events with different src, even if the same src reappears later", function()
             local arr = events({
                 { xp = 100, src = "kill" },
                 { xp = 100, src = "quest" },
@@ -90,8 +89,8 @@ describe("core/xp_bar.lua", function()
         end)
     end)
 
-    describe("redondeo de anchuras", function()
-        it("la suma de segmentos nunca supera el ancho total (tercios exactos)", function()
+    describe("width rounding", function()
+        it("the sum of segments never exceeds the total width (exact thirds)", function()
             local arr = events({
                 { xp = 1, src = "kill" },
                 { xp = 1, src = "quest" },
@@ -103,10 +102,10 @@ describe("core/xp_bar.lua", function()
             for _, s in ipairs(segments) do total = total + s.width end
 
             assert.is_true(total <= 10)
-            assert.are.equal(10, total) -- el nivel esta completo (xp = maxXP)
+            assert.are.equal(10, total) -- the level is complete (xp = maxXP)
         end)
 
-        it("no se pasa del ancho total con muchos eventos pequeños", function()
+        it("doesn't exceed the total width with many small events", function()
             local parts = {}
             for i = 1, 37 do
                 parts[i] = { xp = 1, src = (i % 2 == 0) and "kill" or "quest" }
@@ -121,8 +120,8 @@ describe("core/xp_bar.lua", function()
         end)
     end)
 
-    describe("segmento gris inicial", function()
-        it("aparece primero cuando hay xp previa al registro", function()
+    describe("initial gray segment", function()
+        it("shows up first when there's xp from before tracking started", function()
             local arr = events({ { xp = 100, src = "kill" } })
             local segments = Ledger.ComputeBarSegments(arr, 400, 500, 1000)
 
@@ -134,7 +133,7 @@ describe("core/xp_bar.lua", function()
             assert.are.equal(200, segments[2].offset)
         end)
 
-        it("no aparece si no hay xp previa", function()
+        it("doesn't show up if there's no prior xp", function()
             local arr = events({ { xp = 100, src = "kill" } })
             local segments = Ledger.ComputeBarSegments(arr, 0, 500, 1000)
 
@@ -142,14 +141,14 @@ describe("core/xp_bar.lua", function()
             assert.are.equal("kill", segments[1].src)
         end)
 
-        it("tampoco aparece con initialXP a nil", function()
+        it("doesn't show up with initialXP as nil either", function()
             local arr = events({ { xp = 100, src = "kill" } })
             local segments = Ledger.ComputeBarSegments(arr, nil, 500, 1000)
 
             assert.are.equal(1, #segments)
         end)
 
-        it("puede ser el unico segmento si todavia no hay ningun evento", function()
+        it("can be the only segment if there are no events yet", function()
             local segments = Ledger.ComputeBarSegments({}, 250, 500, 1000)
 
             assert.are.equal(1, #segments)
@@ -159,21 +158,21 @@ describe("core/xp_bar.lua", function()
     end)
 
     describe("restedWidth", function()
-        it("nunca supera width, incluso con rested = xp", function()
+        it("never exceeds width, even with rested = xp", function()
             local arr = events({ { xp = 3, src = "kill", rested = 3 } })
             local segments = Ledger.ComputeBarSegments(arr, 0, 1, 3)
 
             assert.is_true(segments[1].restedWidth <= segments[1].width)
         end)
 
-        it("es 0 cuando el segmento no tiene bono", function()
+        it("is 0 when the segment has no bonus", function()
             local arr = events({ { xp = 100, src = "kill" } })
             local segments = Ledger.ComputeBarSegments(arr, 0, 200, 1000)
 
             assert.are.equal(0, segments[1].restedWidth)
         end)
 
-        it("el segmento inicial nunca tiene rested", function()
+        it("the initial segment never has rested", function()
             local segments = Ledger.ComputeBarSegments({}, 100, 200, 1000)
             assert.are.equal(0, segments[1].restedWidth)
         end)

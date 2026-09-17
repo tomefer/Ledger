@@ -841,19 +841,22 @@ arriba:
     v2→v3, no hay forma de reconstruir retroactivamente cómo se repartió
     el tiempo ya jugado bajo el esquema viejo (el tracker de buckets
     vivía solo en memoria hasta esta versión, nunca se persistía).
-  - v4→v5 (Análisis del SavedVariables real, 2026-09-17), tres cambios
-    en el mismo pase por sesión (`MigrateSessionToV5`) más el
-    renombrado de las entradas de `levels` ya cerradas:
+  - v4→v5 (Análisis del SavedVariables real, 2026-09-17), dos cambios
+    en el mismo pase por sesión (`MigrateSessionToV5`) más el relleno
+    de las entradas de `levels` ya cerradas:
     1. `off` se redondea a entero (`math.floor(off + 0.5)`): el esquema
        viejo lo dejaba con la imprecisión de coma flotante de
        `(GetTime()-t0)*10`.
     2. `src` se traduce de texto a `Ledger.SRC_IDS` si todavía es
        string (no repite la traducción si ya es numérico).
-    3. `session.nivel`/`entry.nivel` se renombran a `level` (el resto
-       del esquema ya estaba en inglés).
-    4. `session.deaths`/`entry.deaths`/`entry.reached` se rellenan a 0
+    3. `session.deaths`/`entry.deaths`/`entry.reached` se rellenan a 0
        si faltan — igual que `rested = 0` en v2→v3, no reconstruibles
        retroactivamente.
+    El campo `level` (antes `nivel` en el esquema original del addon,
+    cuando se llamaba XPTrack) ya no se traduce en esta migración: no
+    hay ninguna SavedVariable real por ahí fuera con el campo viejo
+    (proyecto de un solo usuario, borrable sin coste), así que se quitó
+    el paso de renombrado en vez de mantenerlo como código muerto.
     `session.t0` **NO se traduce**: no hay forma de convertir
     retroactivamente un `GetTime()` viejo (tiempo de actividad del
     cliente) a un `time()` absoluto una vez perdida la correspondencia
