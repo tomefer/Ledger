@@ -292,6 +292,29 @@ describe("core/check.lua", function()
             assert.is_not_nil(Find(result, "Level 11: played 00:20:00, 00:20:00 between dings", "ok"))
         end)
 
+        it("shows a level with no reliable time as skipped, never as a discrepancy", function()
+            local charDB = Setup(900, 1200)
+            charDB.levels[10].totalPlayed = nil
+            charDB.levels[10].timeUnreliable = true
+            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
+
+            assert.are.equal(0, result.discrepancies)
+            local line = Find(result, "Level 10: no reliable played-time data", "skip")
+            assert.is_not_nil(line)
+            assert.is_not_nil(line.text:find("not an addon error", 1, true))
+            -- the other level is still checked normally
+            assert.is_not_nil(Find(result, "Level 11: played 00:20:00", "ok"))
+        end)
+
+        it("skips (does not crash on) a missing totalPlayed even without the flag", function()
+            local charDB = Setup(900, 1200)
+            charDB.levels[11].totalPlayed = nil
+            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
+
+            assert.are.equal(0, result.discrepancies)
+            assert.is_not_nil(Find(result, "Level 11: no reliable played-time data", "skip"))
+        end)
+
         it("flags played time that exceeds the time between dings", function()
             local result = Ledger.BuildCheck(Setup(1500, 1200), { level = 12, xp = 10 })
 

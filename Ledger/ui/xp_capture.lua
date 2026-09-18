@@ -140,6 +140,11 @@ local previousLevel
 -- restart.
 local sessionStartRef
 
+-- true from the moment tracking (re)starts with an unknown played-time
+-- baseline until the TIME_PLAYED_MSG we just asked for arrives and
+-- seeds it. In memory only, on purpose: see core/played_baseline.lua.
+local awaitingPlayedBaseline = false
+
 local function CurrentSession()
     if not sessions then return nil end
     return sessions[#sessions]
@@ -168,7 +173,10 @@ end
 -- (the CHARACTER's total played time according to TIME_PLAYED_MSG, at
 -- the instant the current level started being tracked) from the last
 -- known total: self-correcting against lost sessions, because that
--- total is computed by the server and is always exact. Activity buckets
+-- total is computed by the server and is always exact. If either of the
+-- two is still unknown (nil: see core/played_baseline.lua) totalPlayed
+-- is nil and the entry is flagged timeUnreliable -- never a made-up
+-- number. Activity buckets
 -- (active/downtime/travel/dead) are a separate metric -- how that time
 -- is split, not how much it is -- and get DERIVED from the level's raw
 -- per-second state samples by Ledger.CloseLevel
@@ -180,15 +188,17 @@ end
 local function CloseCurrentLevel(t, xpRequired)
     if not sessions or #sessions == 0 then return end
 
-    local totalPlayed = (LedgerCharDB.lastKnownTotalTimePlayed or 0) - (LedgerCharDB.levelStartTotalPlayed or 0)
-    if totalPlayed < 0 then totalPlayed = 0 end
+    local totalPlayed = Ledger.LevelPlayedTime(LedgerCharDB)
 
     local entry = Ledger.CloseLevel(sessions, totalPlayed, LedgerDB.includeRested, nil, xpRequired)
     Ledger.RecordLevelClose(LedgerCharDB, entry)
     Ledger.Log("trace", string.format(
-        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%ds (lastKnown=%s - levelStart=%s), deaths=%d",
-        entry.level, #sessions, entry.totalXP, entry.totalPlayed,
-        tostring(LedgerCharDB.lastKnownTotalTimePlayed), tostring(LedgerCharDB.levelStartTotalPlayed), entry.deaths))
+        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%s (lastKnown=%s - levelStart=%s)%s, deaths=%d",
+        entry.level, #sessions, entry.totalXP,
+        totalPlayed and (totalPlayed .. "s") or "unknown",
+        tostring(LedgerCharDB.lastKnownTotalTimePlayed), tostring(LedgerCharDB.levelStartTotalPlayed),
+        entry.timeUnreliable and " -- played-time baseline unknown, entry flagged timeUnreliable" or "",
+        entry.deaths))
 
     LedgerCharDB.sessions = {}
     sessions = LedgerCharDB.sessions
@@ -198,9 +208,9 @@ local function CloseCurrentLevel(t, xpRequired)
     -- Snapshot of the character's total played time for the next
     -- close, and a fresh request so it updates as soon as possible
     -- (TIME_PLAYED_MSG arrives asynchronously: see the dispatcher).
-    LedgerCharDB.levelStartTotalPlayed = LedgerCharDB.lastKnownTotalTimePlayed or 0
-    Ledger.Log("trace", string.format("LevelClose: next level's levelStartTotalPlayed advanced to %d",
-        LedgerCharDB.levelStartTotalPlayed))
+    awaitingPlayedBaseline = Ledger.AdvancePlayedBaseline(LedgerCharDB, awaitingPlayedBaseline)
+    Ledger.Log("trace", string.format("LevelClose: next level's levelStartTotalPlayed advanced to %s%s",
+        tostring(LedgerCharDB.levelStartTotalPlayed), awaitingPlayedBaseline and " (unknown: awaiting TIME_PLAYED_MSG)" or ""))
     SafeRequestTimePlayed()
 
     matcher    = Ledger.NewMatcher()
@@ -284,16 +294,19 @@ end
 -- already had on this level before the addon started tracking, UnitXP
 -- at this instant) and `reached` (approximate: the instant tracking
 -- started, not the real ding -- that already happened before installing
--- the addon, just as inexact as initialXP) -- and snapshots the
--- character's total played time as the baseline for this level (see
--- CloseCurrentLevel).
+-- the addon, just as inexact as initialXP) -- and starts the
+-- played-time baseline for this level as UNKNOWN, awaiting the
+-- TIME_PLAYED_MSG that whoever called us asks for right after (see
+-- core/played_baseline.lua and CloseCurrentLevel). Never 0: that made
+-- the first level closed after a fresh install or a wipe record the
+-- character's whole played time.
 local function StartTracking(t, level)
     sessions = LedgerCharDB.sessions
     if #sessions == 0 then
         local session = OpenSession(t, level, false)
         session.initialXP = UnitXP("player")
         session.reached   = time()
-        LedgerCharDB.levelStartTotalPlayed = LedgerCharDB.lastKnownTotalTimePlayed or 0
+        awaitingPlayedBaseline = Ledger.StartPlayedBaseline(LedgerCharDB)
     else
         local lastOffset = Ledger.LastOffset(CurrentSession()) or 0
         sessionStartRef = t - (lastOffset / 10)
@@ -309,13 +322,13 @@ end
 -- session with initialXP = current xp (same as a brand-new character).
 -- Also resets matcher/tracker/reconciler (via StartTracking) and the
 -- previousXP/previousMaxXP/previousLevel reference so the first
--- PLAYER_XP_UPDATE after the wipe doesn't compute a fake delta.
+-- PLAYER_XP_UPDATE after the wipe doesn't compute a fake delta. The
+-- played-time baseline is left unknown and seeded by the
+-- TIME_PLAYED_MSG that SafeRequestTimePlayed() below asks for (a wipe
+-- doesn't reset the character's played time, only Ledger's records).
 -- Irreversible action: meant for /ldg wipe confirm.
 function Ledger.WipeCharacterData(t)
-    LedgerCharDB.levels   = {}
-    LedgerCharDB.sessions = {}
-    LedgerCharDB.lastKnownTotalTimePlayed = 0
-    LedgerCharDB.levelStartTotalPlayed    = 0
+    Ledger.WipeCharDB(LedgerCharDB)
     sessions = nil
     StartTracking(t, UnitLevel("player"))
     previousXP    = UnitXP("player")
@@ -543,8 +556,15 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         -- on the current level (according to the client itself; not
         -- used because it knows nothing about how this addon splits
         -- levels). arg1 is the baseline for totalPlayed: see
-        -- CloseCurrentLevel and StartTracking, which subtract
-        -- LedgerCharDB.levelStartTotalPlayed from this value.
-        LedgerCharDB.lastKnownTotalTimePlayed = arg1
+        -- CloseCurrentLevel, which subtracts
+        -- LedgerCharDB.levelStartTotalPlayed from this value. If the
+        -- baseline was waiting for its first reading (fresh install,
+        -- wipe, level just closed with no total yet), this is it.
+        local wasAwaiting = awaitingPlayedBaseline
+        awaitingPlayedBaseline = Ledger.ApplyTimePlayed(LedgerCharDB, arg1, awaitingPlayedBaseline)
+        if wasAwaiting and not awaitingPlayedBaseline then
+            Ledger.Log("trace", string.format(
+                "TIME_PLAYED_MSG t=%.3f seeded the played-time baseline: levelStartTotalPlayed=%s", t, tostring(arg1)))
+        end
     end
 end)

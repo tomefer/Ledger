@@ -74,6 +74,18 @@ describe("core/state_dump.lua", function()
             assert.is_true(pos7 < pos12)
         end)
 
+        it("shows a level with unknown played time as such, without erroring on the missing number", function()
+            local levels = {
+                [6] = { level = 6, totalXP = 500, timeUnreliable = true },
+                [7] = { level = 7, totalXP = 200, totalPlayed = 300 },
+            }
+
+            local text = Ledger.FormatState({ levels = levels })
+
+            assert.is_not_nil(text:find("level 6: xp=500, rested=0, time=unknown (no reliable played-time data)", 1, true))
+            assert.is_not_nil(text:find("level 7: xp=200, rested=0, time=300s", 1, true))
+        end)
+
         it("shows the thresholds a level's buckets were derived with, or unknown", function()
             local levels = {
                 [7]  = { level = 7, totalXP = 200, totalPlayed = 300, thresholds = { downtime = 15, sustainedMovement = 3 } },

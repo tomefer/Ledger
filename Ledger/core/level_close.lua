@@ -10,7 +10,10 @@
 -- what it's given.
 --
 -- totalPlayed is received already computed (from TIME_PLAYED_MSG, see
--- ui/xp_capture.lua); this function does not compute it.
+-- core/played_baseline.lua and ui/xp_capture.lua); this function does
+-- not compute it. It can be nil when the played-time baseline was
+-- unknown at close: then the entry records no totalPlayed at all and
+-- carries timeUnreliable = true, never an invented number.
 
 local ADDON_NAME, Ledger = ...
 
@@ -112,6 +115,11 @@ function Ledger.CloseLevel(sessions, totalPlayed, includeRested, thresholds, xpR
         totalXP     = totalXP,
         totalRested = totalRested,
         totalPlayed = totalPlayed,
+        -- true (never false: the field is simply absent on a level with
+        -- a trustworthy time) when totalPlayed is nil. Anything that
+        -- reads totalPlayed must skip these levels instead of treating
+        -- the missing value as 0.
+        timeUnreliable = (totalPlayed == nil) or nil,
         deaths      = deaths,
         bySource    = bySource,
         curve       = curve,

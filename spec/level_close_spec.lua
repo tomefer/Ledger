@@ -106,6 +106,25 @@ describe("core/level_close.lua", function()
         end)
     end)
 
+    describe("CloseLevel: unknown played time", function()
+        it("a nil totalPlayed is kept nil and flags the entry timeUnreliable", function()
+            local s = Ledger.NewSession(0, 6)
+            Ledger.AddEvent(s, 0, 50, "kill")
+
+            local entry = Ledger.CloseLevel({ s }, nil)
+
+            assert.is_nil(entry.totalPlayed)
+            assert.is_true(entry.timeUnreliable)
+        end)
+
+        it("a known totalPlayed, even 0, leaves the flag absent", function()
+            local s = Ledger.NewSession(0, 6)
+
+            assert.is_nil(Ledger.CloseLevel({ s }, 0).timeUnreliable)
+            assert.are.equal(0, Ledger.CloseLevel({ s }, 0).totalPlayed)
+        end)
+    end)
+
     describe("CloseLevel: xpRequired and initialXP (for /ldg check)", function()
         it("records the level's requirement and the first session's initialXP", function()
             local a = Ledger.NewSession(0, 9)

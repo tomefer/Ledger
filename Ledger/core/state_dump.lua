@@ -76,8 +76,12 @@ local function FormatLevels(levels)
             thresholds = string.format("downtime=%ss/sustained=%ss",
                 tostring(entry.thresholds.downtime), tostring(entry.thresholds.sustainedMovement))
         end
-        table.insert(lines, string.format("  level %s: xp=%d, rested=%d, time=%ds, deaths=%d, thresholds=%s",
-            tostring(entry.level), entry.totalXP, entry.totalRested or 0, entry.totalPlayed, entry.deaths or 0, thresholds))
+        local played = "unknown (no reliable played-time data)"
+        if entry.totalPlayed and not entry.timeUnreliable then
+            played = string.format("%ds", entry.totalPlayed)
+        end
+        table.insert(lines, string.format("  level %s: xp=%d, rested=%d, time=%s, deaths=%d, thresholds=%s",
+            tostring(entry.level), entry.totalXP, entry.totalRested or 0, played, entry.deaths or 0, thresholds))
     end
     return table.concat(lines, "\n")
 end

@@ -6,7 +6,7 @@ local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/xp.lua")
 
-Ledger.DB_VERSION = 7
+Ledger.DB_VERSION = 8
 
 Ledger.DEFAULTS = {
     pos             = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
@@ -235,6 +235,35 @@ function Ledger.MigrateDB(db)
         version = 7
     end
 
+    if version < 8 then
+        -- v7 -> v8: the played-time baseline becomes nil = unknown
+        -- instead of defaulting to 0 (core/played_baseline.lua). Data
+        -- saved under the old rule can carry a bogus 0 that would make
+        -- the level in progress close with the character's whole played
+        -- time as its totalPlayed:
+        --   - lastKnownTotalTimePlayed = 0 can only mean "never
+        --     received" (a real reading is never 0): back to nil.
+        --   - levelStartTotalPlayed = 0 is legitimate only for a
+        --     character tracked from level 1 (it really had played
+        --     nothing yet); on any other level it's the bug, so it goes
+        --     back to nil. It is NOT re-seeded from the next
+        --     TIME_PLAYED_MSG (that would be later than the level
+        --     really started): the level in progress simply closes with
+        --     no reliable time.
+        -- Levels already closed keep their totalPlayed as recorded:
+        -- there's no telling a bogus one apart afterward.
+        if db.lastKnownTotalTimePlayed == 0 then
+            db.lastKnownTotalTimePlayed = nil
+        end
+        if db.levelStartTotalPlayed == 0 then
+            local first = db.sessions and db.sessions[1]
+            if not (first and first.level == 1) then
+                db.levelStartTotalPlayed = nil
+            end
+        end
+        version = 8
+    end
+
     db.version = version
     return db
 end
@@ -266,7 +295,8 @@ end
 -- ui/xp_capture.lua). lastKnownTotalTimePlayed is the last total played
 -- time of the CHARACTER reported by TIME_PLAYED_MSG (arg1);
 -- levelStartTotalPlayed is that same total at the instant tracking of
--- the current level started. A closed level's totalPlayed is the
+-- the current level started; both are nil while unknown (never 0: see
+-- core/played_baseline.lua). A closed level's totalPlayed is the
 -- difference between the two (self-correcting against lost sessions:
 -- if a login gets skipped, the next TIME_PLAYED_MSG compensates on its
 -- own, because the character's total is always exact). See
@@ -274,8 +304,10 @@ end
 Ledger.CHAR_DEFAULTS = {
     levels   = {},
     sessions = {},
-    lastKnownTotalTimePlayed = 0,
-    levelStartTotalPlayed    = 0,
+    -- lastKnownTotalTimePlayed and levelStartTotalPlayed have NO default
+    -- on purpose: nil means "unknown" (see core/played_baseline.lua). A
+    -- default of 0 here made a fresh install's first closed level record
+    -- the character's whole played time as its own.
 }
 
 -- Guarantees the full structure of LedgerCharDB (version, levels,

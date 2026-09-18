@@ -119,6 +119,41 @@ describe("core/export.lua", function()
         end)
     end)
 
+    describe("unknown played time is never exported as 0", function()
+        local function Charlie()
+            return {
+                version = 8,
+                sessions = {},
+                levels = {
+                    [6] = { level = 6, reached = 100, totalXP = 500, totalRested = 0, timeUnreliable = true,
+                            deaths = 0, bySource = { kill = 500 }, curve = { 500 } },
+                    [7] = { level = 7, reached = 900, totalXP = 700, totalRested = 0, totalPlayed = 600,
+                            deaths = 0, bySource = { kill = 700 }, curve = { 700 } },
+                },
+            }
+        end
+
+        it("JSON: null totalPlayed and lastKnown/levelStart, plus the timeUnreliable flag", function()
+            local decoded, _, err = dkjson.decode(Ledger.ExportJSON(Charlie()))
+
+            assert.is_nil(err)
+            assert.is_nil(decoded.lastKnownTotalTimePlayed)
+            assert.is_nil(decoded.levelStartTotalPlayed)
+            assert.is_nil(decoded.levels[1].totalPlayed)
+            assert.is_true(decoded.levels[1].timeUnreliable)
+            assert.are.equal(600, decoded.levels[2].totalPlayed)
+            assert.is_false(decoded.levels[2].timeUnreliable)
+        end)
+
+        it("CSV: an empty totalPlayed cell (columns stay aligned) and the flag column", function()
+            local text = Ledger.ExportCSV(Charlie())
+
+            assert.is_not_nil(text:find("totalPlayed,deaths,timeUnreliable", 1, true))
+            assert.is_not_nil(text:find("6,100,500,0,,0,true", 1, true))
+            assert.is_not_nil(text:find("7,900,700,0,600,0,false", 1, true))
+        end)
+    end)
+
     describe("ExportJSON: full charDB is valid, round-trippable JSON", function()
         it("decodes back to the expected structure, including escaped special characters", function()
             local session = Ledger.NewSession(1000, 12, 'farm "solo"', false)

@@ -405,7 +405,13 @@ levels[level] = {
                    del personaje (NO la suma de buckets, que es una
                    métrica aparte — ver "Buckets de tiempo" y "Cierre de
                    nivel" más abajo); se pasa ya calculado, CloseLevel NO
-                   lo calcula>,
+                   lo calcula. **`nil` si la línea base de tiempo era
+                   desconocida al cerrar** (ver "`totalPlayed` de un
+                   nivel"): nunca un 0 ni un número inventado>,
+    timeUnreliable = <`true` exactamente cuando `totalPlayed` es nil
+                   (dato de tiempo no fiable); AUSENTE en un nivel con
+                   tiempo válido, nunca `false`. Todo lo que lea
+                   `totalPlayed` debe saltarse estos niveles>,
     deaths      = <suma de session.deaths de todas las sesiones del nivel>,
     bySource    = { kill = ..., explore = ..., ... },  -- xp total tal
                                                          -- cual, nunca
@@ -685,17 +691,67 @@ en memoria ha ido muestreando.
 - `LedgerCharDB.lastKnownTotalTimePlayed`: el último `arg1` recibido de
   `TIME_PLAYED_MSG` — se actualiza siempre que llega, sin condición.
 - `LedgerCharDB.levelStartTotalPlayed`: ese mismo total en el instante
-  en que se empezó a rastrear el nivel EN CURSO (snapshot en
-  `StartTracking` para el arranque en frío, y en `CloseCurrentLevel`
-  para cada cierre).
+  en que se empezó a rastrear el nivel EN CURSO.
 - `entry.totalPlayed = lastKnownTotalTimePlayed - levelStartTotalPlayed`
-  (recortado a 0 si saliera negativo, salvaguarda defensiva).
-- `RequestTimePlayed()` se llama en `PLAYER_ENTERING_WORLD` (ya estaba)
-  y ahora también en `CloseCurrentLevel`, justo después de snapshotear
-  `levelStartTotalPlayed`: la respuesta (asíncrona, vía `TIME_PLAYED_MSG`)
-  no llega a tiempo para el cierre que la disparó, pero sí refina
+  (recortado a 0 si saliera negativo, salvaguarda defensiva), calculado
+  SOLO por `Ledger.LevelPlayedTime(charDB)` (`core/played_baseline.lua`):
+  el único sitio que resta los dos totales, usado tanto por el cierre
+  de nivel como por el xp/hora en vivo del nivel.
+- `RequestTimePlayed()` se llama en `PLAYER_ENTERING_WORLD`, en
+  `CloseCurrentLevel` (justo después de avanzar la base) y tras un
+  `/ldg wipe`: la respuesta (asíncrona, vía `TIME_PLAYED_MSG`) no llega a
+  tiempo para el cierre que la disparó, pero sí refina
   `lastKnownTotalTimePlayed` para el PRÓXIMO cierre — de ahí que sea
   "autocorregible" en vez de exacto al instante.
+
+**`nil` significa DESCONOCIDO, nunca cero** (bug real, wipe/instalación
+nueva: el primer nivel cerrado registró 01:37:15 jugados frente a
+00:16:16 entre dings, porque `CHAR_DEFAULTS` y `WipeCharacterData`
+dejaban la base a 0 y el cierre calculaba `lastKnown - 0` = el tiempo
+jugado TOTAL del personaje). El total no está disponible en el instante
+en que empieza el rastreo — `RequestTimePlayed` es asíncrono — así que
+`lastKnownTotalTimePlayed` y `levelStartTotalPlayed` **no tienen default**
+en `Ledger.CHAR_DEFAULTS` y valen `nil` mientras no se sepan. Las
+transiciones son lógica pura en `core/played_baseline.lua`
+(`StartPlayedBaseline`, `ApplyTimePlayed`, `LevelPlayedTime`,
+`AdvancePlayedBaseline`, `WipeCharDB`), testeada en
+`spec/played_baseline_spec.lua`; `ui/xp_capture.lua` solo las llama.
+
+- **`awaitingPlayedBaseline`** (local en memoria de `ui/xp_capture.lua`,
+  a propósito NO persistido): "la base es nil Y el próximo
+  `TIME_PLAYED_MSG` es el valor correcto para sembrarla". Se activa al
+  arrancar el rastreo en frío (`StartTracking` con `#sessions == 0`:
+  instalación nueva) y en `/ldg wipe`, y en `CloseCurrentLevel` si al
+  avanzar la base tampoco se sabía el total. `ApplyTimePlayed` siempre
+  refresca `lastKnown` y, solo si estaba esperando, siembra la base con
+  ese mismo valor (`TIME_PLAYED_MSG` trae el total del personaje, no el
+  del nivel: en el instante de arranque ambos coinciden). Una base nil
+  con `awaiting = false` (datos migrados, o la respuesta no llegó antes
+  de un `/reload`) se queda desconocida para siempre: sembrarla después
+  sería posterior al inicio real del nivel.
+- **`/ldg wipe`** (`Ledger.WipeCharDB`) vacía `levels`/`sessions` y
+  también olvida `lastKnownTotalTimePlayed` (pertenecía a los datos
+  borrados; el wipe no resetea el tiempo jugado del personaje, solo los
+  registros de Ledger) y deja la base desconocida hasta que llegue la
+  respuesta.
+- **Cierre con base o total desconocidos**: `totalPlayed = nil` y
+  `entry.timeUnreliable = true` (`Ledger.CloseLevel`), nunca un número
+  inventado. Un cierre que ocurre ANTES de que llegue la respuesta
+  también deja el nivel siguiente con base desconocida
+  (`AdvancePlayedBaseline` no copia un `lastKnown` que aún no es "ahora").
+- **Lectores** que respetan el nil: `/ldg check` (`skip`, "sin dato de
+  tiempo fiable", nunca discrepancia — no es un error del addon),
+  `ui/rate_frame.lua` (el "This level" del xp/hora sale como `"-"` en vez
+  de dividir por un número falso — es el único cálculo de xp/hora que
+  usa esta resta; los niveles cerrados no tienen ninguno),
+  `core/state_dump.lua` (`time=unknown (no reliable played-time data)`) y
+  `core/export.lua` (JSON `null` + `"timeUnreliable"`, y en CSV celda
+  vacía + columna `timeUnreliable`; también `lastKnownTotalTimePlayed`/
+  `levelStartTotalPlayed` salen `null`, nunca 0).
+- Los niveles cerrados ANTES de este arreglo conservan el `totalPlayed`
+  que tuvieran: no hay forma de distinguir a posteriori uno inflado por
+  la base a 0 (`/ldg check` lo marcará como discrepancia de tiempo si el
+  jugado excede el tiempo entre dings).
 
 ### Barra de composición de xp (`core/xp_bar.lua` + `ui/xp_bar.lua`, `/ldg bar`)
 
@@ -1165,8 +1221,11 @@ muestra el texto. Tests en `spec/check_spec.lua`.
   = 60s de margen); jugado menor es normal (tiempo desconectado no
   cuenta) y se muestra como dato. También se marca si los dings salen
   desordenados. `reached = 0`, `n+1` sin seguimiento o sin `reached`
-  → `skip`. Sospechoso principal: la base `levelStartTotalPlayed`
-  desalineada (ver "Pendiente").
+  → `skip`. Un nivel con `timeUnreliable` (o sin `totalPlayed`) también
+  → `skip`, "no reliable played-time data", explícitamente no un error
+  del addon (ver "`totalPlayed` de un nivel"). Sospechoso principal de
+  un desfase real: la base `levelStartTotalPlayed` desalineada (ver
+  "Pendiente").
 - **Xp pendiente de emparejar** (hasta ~1s dentro del matcher) puede
   verse como un negativo transitorio justo tras un kill o un ding: la
   ventana lo avisa en sus notas; el botón `Refresh` la relee.
@@ -1327,7 +1386,7 @@ arriba:
 
 - `LedgerDB` (cuenta, `## SavedVariables`): `pos`, `shown`, `version`,
   `includeRested` (toggle de `/ldg rested`, `true` por defecto),
-  `barShown`/`barHeight`/`timeBarShown` (barras). `version` está en 7
+  `barShown`/`barHeight`/`timeBarShown` (barras). `version` está en 8
   (`Ledger.DB_VERSION`); `core/xp.lua: MigrateDB(db)` sube cualquier
   `db` por debajo de la versión actual:
   - v1→v2: solo estampa el número de versión (esquema previo a las
@@ -1391,10 +1450,20 @@ arriba:
     muestras (sus buckets se derivaron con esas constantes); un nivel
     con serie vacía (migrado desde v5, buckets a cero) no tiene
     umbrales conocidos y se queda sin el campo.
+  - v7→v8 (bug del tiempo jugado del primer nivel tras wipe/instalación
+    nueva, ver "`totalPlayed` de un nivel"): la base de tiempo jugado
+    pasa de "0 por defecto" a "nil = desconocido".
+    `lastKnownTotalTimePlayed = 0` (solo pudo significar "nunca
+    recibido") vuelve a nil. `levelStartTotalPlayed = 0` se conserva
+    únicamente si el nivel en curso es el 1 (el personaje de verdad no
+    había jugado nada); en cualquier otro nivel es el bug, y vuelve a
+    nil SIN resembrarse con el próximo `TIME_PLAYED_MSG` (sería más
+    tarde que el inicio real del nivel): ese nivel se cierra con
+    `timeUnreliable`. Los niveles ya cerrados no se tocan.
 - `LedgerCharDB` (por personaje, `## SavedVariablesPerCharacter`):
   `{ version, levels, sessions, lastKnownTotalTimePlayed,
-  levelStartTotalPlayed }` (los dos últimos, ver "`totalPlayed` de un
-  nivel" arriba). Se inicializa en `ADDON_LOADED` con `LedgerCharDB =
+  levelStartTotalPlayed }` (los dos últimos, sin default y `nil` =
+  desconocido; ver "`totalPlayed` de un nivel" arriba). Se inicializa en `ADDON_LOADED` con `LedgerCharDB =
   Ledger.InitCharDB(LedgerCharDB)` (`core/xp.lua`), que reutiliza
   `InitDB`/`MigrateDB` con `Ledger.CHAR_DEFAULTS` — nunca pisa lo que ya
   hubiera, solo rellena lo que falte y migra la versión. `sessions` es
@@ -1450,6 +1519,20 @@ falta en el `.toc`).
   el instante del cierre (`RequestTimePlayed` es asíncrono, y llamarlo
   periódicamente imprimiría "Total time played" en el chat): habría que
   extrapolarlo con `time()` desde la última respuesta.
+- **Verificar en el juego el arreglo de la base desconocida** (nunca
+  probado con el cliente real; solo con tests): tras `/ldg wipe confirm`
+  y tras una instalación nueva a mitad de nivel, que el TRACE
+  `TIME_PLAYED_MSG ... seeded the played-time baseline` salga una vez y
+  que el primer nivel cerrado tenga un `totalPlayed` cercano al tiempo
+  entre dings (no al total del personaje); que un nivel que cierra antes
+  de la respuesta salga con `time=unknown` en `/ldg dump` y como `[??]`
+  en `/ldg check`. **Sigue sin resolver, aparte de esto**: el
+  `lastKnownTotalTimePlayed` con el que se cierra un nivel puede estar
+  desfasado por la cantidad de tiempo transcurrida desde su última
+  respuesta (solo se refresca en `PLAYER_ENTERING_WORLD`, tras un cierre
+  o con `/played`), lo que infravalora `totalPlayed` aunque la base sea
+  buena; ese desfase, a diferencia de la base a 0, no se marca como no
+  fiable.
 - El sobrante de un cruce de nivel hereda el `src` del evento original
   (`EmitCrossingEvent` usa `paired.src` en las dos mitades): un sobrante
   `explore` en `off=0` del nivel nuevo solo puede venir de que el evento

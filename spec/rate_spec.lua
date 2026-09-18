@@ -72,6 +72,17 @@ describe("core/rate.lua", function()
             assert.are.equal(0, rates.levelRate)
         end)
 
+        it("an unknown level played time (nil) gives a nil level rate -- a dash, never a divide by a made-up number", function()
+            local session = Ledger.NewSession(0, 10)
+            Ledger.AddEvent(session, 0, 500, "kill")
+
+            local rates = Ledger.ComputeHeadlineRates(session, { session }, 600, nil, true)
+
+            assert.is_nil(rates.levelRate)
+            assert.are.equal(3000, rates.sessionRate) -- the session's own rate is unaffected
+            assert.are.equal("-", Ledger.FormatXPRate(rates.levelRate))
+        end)
+
         it("a nil session (no active session at all) yields a session rate of 0, not an error", function()
             local rates = Ledger.ComputeHeadlineRates(nil, {}, 600, 600, true)
 

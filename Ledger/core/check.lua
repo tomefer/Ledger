@@ -242,12 +242,20 @@ function Ledger.BuildCheck(charDB, player)
         local reached    = entry.reached or 0
         local nextReached = NextReached(charDB, level)
 
-        if reached <= 0 or not nextReached then
+        if entry.timeUnreliable or entry.totalPlayed == nil then
+            -- The played-time baseline was unknown when this level closed
+            -- (fresh install or wipe, see core/played_baseline.lua): no
+            -- totalPlayed was recorded. Nothing to compare, and it's not
+            -- an addon error, so it's neither OK nor a discrepancy.
+            add("skip", string.format(
+                "Level %d: no reliable played-time data (the baseline was unknown when it closed) -- not an addon error",
+                level))
+        elseif reached <= 0 or not nextReached then
             add("skip", string.format(
                 "Level %d: cannot verify -- the ding time of level %d or %d is not known", level, level, level + 1))
         else
             local elapsed = nextReached - reached
-            local played  = entry.totalPlayed or 0
+            local played  = entry.totalPlayed
             if elapsed < 0 then
                 add("bad", string.format(
                     "Level %d: the next level's ding is %s BEFORE this one's -- ding times are out of order",

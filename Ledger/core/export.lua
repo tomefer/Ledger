@@ -64,6 +64,14 @@ function Ledger.JSONNumber(n)
     return string.format("%.14g", n)
 end
 
+-- Same, but nil becomes JSON null: for the played-time fields, where nil
+-- means "unknown" (core/played_baseline.lua) and writing 0 would export
+-- a made-up number.
+function Ledger.JSONNumberOrNull(n)
+    if n == nil then return "null" end
+    return Ledger.JSONNumber(n)
+end
+
 ----------------------------------------------------------------------
 -- CSV primitives (RFC 4180-ish: quote a field that contains a comma,
 -- quote or newline, doubling up any quote inside it).
@@ -109,8 +117,9 @@ function Ledger.BuildExportModel(charDB)
 
     local model = {
         version                  = charDB.version or 0,
-        lastKnownTotalTimePlayed = charDB.lastKnownTotalTimePlayed or 0,
-        levelStartTotalPlayed    = charDB.levelStartTotalPlayed or 0,
+        -- nil (unknown) stays nil: never exported as 0
+        lastKnownTotalTimePlayed = charDB.lastKnownTotalTimePlayed,
+        levelStartTotalPlayed    = charDB.levelStartTotalPlayed,
         includeEvents            = includeEvents,
         totalEventCount          = totalEventCount,
         levels                   = {},
@@ -130,7 +139,8 @@ function Ledger.BuildExportModel(charDB)
             reached     = entry.reached or 0,
             totalXP     = entry.totalXP or 0,
             totalRested = entry.totalRested or 0,
-            totalPlayed = entry.totalPlayed or 0,
+            totalPlayed = entry.totalPlayed, -- nil when unknown
+            timeUnreliable = entry.timeUnreliable == true,
             deaths      = entry.deaths or 0,
             bySource    = entry.bySource or {},
             curve       = entry.curve or {},
@@ -222,9 +232,10 @@ end
 
 local function JSONLevel(entry)
     return string.format(
-        '{"level":%s,"reached":%s,"totalXP":%s,"totalRested":%s,"totalPlayed":%s,"deaths":%s,"bySource":%s,"curve":%s,"buckets":%s}',
+        '{"level":%s,"reached":%s,"totalXP":%s,"totalRested":%s,"totalPlayed":%s,"timeUnreliable":%s,"deaths":%s,"bySource":%s,"curve":%s,"buckets":%s}',
         Ledger.JSONNumber(entry.level), Ledger.JSONNumber(entry.reached), Ledger.JSONNumber(entry.totalXP),
-        Ledger.JSONNumber(entry.totalRested), Ledger.JSONNumber(entry.totalPlayed), Ledger.JSONNumber(entry.deaths),
+        Ledger.JSONNumber(entry.totalRested), Ledger.JSONNumberOrNull(entry.totalPlayed),
+        tostring(entry.timeUnreliable), Ledger.JSONNumber(entry.deaths),
         JSONBySource(entry.bySource), JSONNumberArray(entry.curve), JSONBuckets(entry.buckets))
 end
 
@@ -277,8 +288,8 @@ function Ledger.ExportJSON(charDB)
     return string.format(
         '{"version":%s,"lastKnownTotalTimePlayed":%s,"levelStartTotalPlayed":%s,"includeEvents":%s,"totalEventCount":%s,"levels":[%s],"sessions":[%s]}',
         Ledger.JSONNumber(model.version),
-        Ledger.JSONNumber(model.lastKnownTotalTimePlayed),
-        Ledger.JSONNumber(model.levelStartTotalPlayed),
+        Ledger.JSONNumberOrNull(model.lastKnownTotalTimePlayed),
+        Ledger.JSONNumberOrNull(model.levelStartTotalPlayed),
         tostring(model.includeEvents),
         Ledger.JSONNumber(model.totalEventCount),
         table.concat(levels, ","),
@@ -300,10 +311,13 @@ function Ledger.ExportCSV(charDB)
     local lines = {}
 
     table.insert(lines, "# levels")
-    table.insert(lines, Ledger.CSVRow({ "level", "reached", "totalXP", "totalRested", "totalPlayed", "deaths" }))
+    table.insert(lines, Ledger.CSVRow({ "level", "reached", "totalXP", "totalRested", "totalPlayed", "deaths", "timeUnreliable" }))
     for _, entry in ipairs(model.levels) do
+        -- An unknown totalPlayed is an EMPTY cell (a nil in the middle of
+        -- the list would also cut CSVRow's ipairs short).
         table.insert(lines, Ledger.CSVRow({
-            entry.level, entry.reached, entry.totalXP, entry.totalRested, entry.totalPlayed, entry.deaths,
+            entry.level, entry.reached, entry.totalXP, entry.totalRested,
+            entry.totalPlayed == nil and "" or entry.totalPlayed, entry.deaths, tostring(entry.timeUnreliable),
         }))
     end
 
