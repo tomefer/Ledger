@@ -53,6 +53,11 @@ function Ledger.ComputeXPDelta(previousXP, currentXP, previousMaxXP, previousLev
         -- split the event into two entries -- one that closes the old
         -- level, another that opens the new one -- instead of
         -- attributing the whole gain to just one of the two levels.
+        -- oldMax is the xp the old level required (its cached max): it
+        -- travels with the crossing so the level-close entry can record
+        -- it (entry.xpRequired) and /ldg check can verify the level's
+        -- recorded xp against it -- there is no API to ask for it once
+        -- the ding has happened.
         local oldPart = previousMaxXP - previousXP
         local newPart = currentXP
         return {
@@ -64,6 +69,7 @@ function Ledger.ComputeXPDelta(previousXP, currentXP, previousMaxXP, previousLev
                 newPart  = newPart,
                 oldLevel = previousLevel,
                 newLevel = currentLevel,
+                oldMax   = previousMaxXP,
             },
         }
     end

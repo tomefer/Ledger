@@ -60,6 +60,7 @@ describe("core/xp_delta.lua", function()
             assert.are.equal(r.delta, r.crossing.oldPart + r.crossing.newPart)
             assert.are.equal(12, r.crossing.oldLevel)
             assert.are.equal(13, r.crossing.newLevel)
+            assert.are.equal(1000, r.crossing.oldMax) -- the old level's requirement, for level-close
         end)
     end)
 

@@ -106,6 +106,31 @@ describe("core/level_close.lua", function()
         end)
     end)
 
+    describe("CloseLevel: xpRequired and initialXP (for /ldg check)", function()
+        it("records the level's requirement and the first session's initialXP", function()
+            local a = Ledger.NewSession(0, 9)
+            a.initialXP = 300
+            Ledger.AddEvent(a, 0, 700, "kill")
+            local b = Ledger.NewSession(5000, 9)
+            b.initialXP = 999 -- only the level's FIRST session can carry it; never summed
+
+            local entry = Ledger.CloseLevel({ a, b }, 100, true, nil, 1000)
+
+            assert.are.equal(1000, entry.xpRequired)
+            assert.are.equal(300, entry.initialXP)
+        end)
+
+        it("leaves xpRequired absent when not given, and initialXP at 0", function()
+            local s = Ledger.NewSession(0, 9)
+            Ledger.AddEvent(s, 0, 50, "kill")
+
+            local entry = Ledger.CloseLevel({ s }, 100)
+
+            assert.is_nil(entry.xpRequired)
+            assert.are.equal(0, entry.initialXP)
+        end)
+    end)
+
     describe("CloseLevel with the includeRested toggle", function()
         it("with includeRested=false, totalXP and curve subtract the bonus, totalRested doesn't change", function()
             local s = Ledger.NewSession(0, 8)

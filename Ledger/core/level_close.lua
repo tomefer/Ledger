@@ -62,7 +62,15 @@ end
 -- is an optional override, each field defaulting to the current
 -- Ledger.DOWNTIME_THRESHOLD/Ledger.SUSTAINED_MOVEMENT_SECONDS), so a
 -- level closed under other thresholds can be told apart.
-function Ledger.CloseLevel(sessions, totalPlayed, includeRested, thresholds)
+--
+-- xpRequired (optional) is the xp the level required to complete
+-- (UnitXPMax of that level, known at the ding: see
+-- Ledger.ComputeXPDelta's crossing.oldMax); when omitted the entry
+-- carries no xpRequired and /ldg check can't verify that level's xp.
+-- entry.initialXP is the xp the player already had on this level before
+-- tracking started (sessions[1].initialXP, 0 if none): the level's
+-- recorded xp + initialXP is what should add up to xpRequired.
+function Ledger.CloseLevel(sessions, totalPlayed, includeRested, thresholds, xpRequired)
     local totalXP     = 0
     local totalRested = 0
     local deaths      = 0
@@ -99,6 +107,8 @@ function Ledger.CloseLevel(sessions, totalPlayed, includeRested, thresholds)
     return {
         level       = sessions[1].level,
         reached     = sessions[1].reached or 0,
+        initialXP   = sessions[1].initialXP or 0,
+        xpRequired  = xpRequired,
         totalXP     = totalXP,
         totalRested = totalRested,
         totalPlayed = totalPlayed,

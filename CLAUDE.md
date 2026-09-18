@@ -382,6 +382,17 @@ levels[level] = {
     reached     = <time() absoluto del ding que llevó a este nivel; 0 si
                    viene de datos de antes de esta migración (no
                    reconstruible retroactivamente) — ver sessions[1].reached>,
+    initialXP   = <xp que el jugador ya llevaba en el nivel antes de que
+                   el addon empezara a rastrearlo (sessions[1].initialXP,
+                   0 si no hubo): la xp registrada + initialXP es lo que
+                   debe sumar xpRequired. Solo el primer nivel rastreado
+                   en frío lo tiene distinto de 0>,
+    xpRequired  = <xp que ese nivel requería para completarse
+                   (UnitXPMax del nivel viejo, `crossing.oldMax` de
+                   Ledger.ComputeXPDelta, pasado por CloseCurrentLevel).
+                   Ausente en niveles cerrados antes de guardarlo: no hay
+                   API para pedirlo a posteriori — /ldg check los marca
+                   como "no verificable", no como discrepancia>,
     totalXP     = <suma de la xp EFECTIVA de todas las sesiones del
                    nivel, xp o xp-rested segun includeRested (true por
                    defecto); ver Ledger.EffectiveXP arriba>,
@@ -454,10 +465,13 @@ nunca por orden de inserción: si el addon se instala a mitad de partida
     `ok=false`, se loguea a ERROR, no se inventa un número).
   - Sube exactamente un nivel: `delta = (maxAnteriorCacheado - xpAnterior)
     + xpActual`. Además expone `crossing = { oldPart = maxAnteriorCacheado
-    - xpAnterior, newPart = xpActual, oldLevel=, newLevel= }` — `oldPart +
-    newPart == delta` siempre — para que quien grabe el evento pueda
-    partirlo en dos entradas en vez de metérselo entero a un solo nivel
-    (ver "Cruce de nivel" más abajo).
+    - xpAnterior, newPart = xpActual, oldLevel=, newLevel=, oldMax =
+    maxAnteriorCacheado }` — `oldPart + newPart == delta` siempre — para
+    que quien grabe el evento pueda partirlo en dos entradas en vez de
+    metérselo entero a un solo nivel (ver "Cruce de nivel" más abajo).
+    `oldMax` es la xp que requería el nivel viejo: acaba en
+    `entry.xpRequired` al cerrarlo (`EmitCrossingEvent` →
+    `CloseCurrentLevel(t, xpRequired)` → `Ledger.CloseLevel(..., xpRequired)`).
   - Sube más de un nivel de golpe: **no hay API en Classic Era para el
     requisito de xp de niveles intermedios**, así que no es calculable.
     Se detecta contando `UnitLevel` antes/después y se loguea a ERROR

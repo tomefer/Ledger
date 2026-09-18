@@ -173,13 +173,17 @@ end
 -- is split, not how much it is -- and get DERIVED from the level's raw
 -- per-second state samples by Ledger.CloseLevel
 -- (Ledger.ComputeBucketsFromState), never accumulated live here.
-local function CloseCurrentLevel(t)
+--
+-- xpRequired is the closed level's own xp requirement (the crossing's
+-- oldMax), recorded on the entry so /ldg check can verify the level's
+-- xp against it.
+local function CloseCurrentLevel(t, xpRequired)
     if not sessions or #sessions == 0 then return end
 
     local totalPlayed = (LedgerCharDB.lastKnownTotalTimePlayed or 0) - (LedgerCharDB.levelStartTotalPlayed or 0)
     if totalPlayed < 0 then totalPlayed = 0 end
 
-    local entry = Ledger.CloseLevel(sessions, totalPlayed, LedgerDB.includeRested)
+    local entry = Ledger.CloseLevel(sessions, totalPlayed, LedgerDB.includeRested, nil, xpRequired)
     Ledger.RecordLevelClose(LedgerCharDB, entry)
     Ledger.Log("trace", string.format(
         "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%ds (lastKnown=%s - levelStart=%s), deaths=%d",
@@ -229,7 +233,7 @@ local function EmitCrossingEvent(paired)
         Ledger.AddEvent(oldSession, offset, split.old.xp, paired.src, split.old.rested)
     end
 
-    CloseCurrentLevel(paired.t)
+    CloseCurrentLevel(paired.t, paired.crossing.oldMax)
 
     -- offset 0: sessionStartRef was just rebound to paired.t in
     -- OpenSession (inside CloseCurrentLevel).
