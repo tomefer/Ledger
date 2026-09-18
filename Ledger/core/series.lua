@@ -27,7 +27,7 @@ Ledger.SERIES = {
     -- the text name.
     -- future: gold (stride 3), rep (stride 4, with a faction field),
     --         loot (stride 3).
-    state = { key = "st", stride = 1, fields = { "flags" } },
+    state = { key = "stateSeries", stride = 1, fields = { "flags" } },
     -- state: one packed integer per second (Ledger.PackStateFlags/
     -- UnpackStateFlags, core/time_buckets.lua) with the raw combat/
     -- moving/dead/taxi flags sampled that second. Unlike the xp series

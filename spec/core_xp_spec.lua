@@ -6,7 +6,7 @@ describe("core/xp.lua", function()
 
     before_each(function()
         Ledger = {}
-        -- MigrateDB (v2->v3, v3->v4, v4->v5, v5->v6) rewrites the xp
+        -- MigrateDB (v2->v3 ... v6->v7) rewrites the xp
         -- series and the time-state series using the generic helpers
         -- from core/series.lua and core/time_buckets.lua: they need to
         -- be loaded too, same as in level_close_spec.lua/events_spec.lua.
@@ -26,8 +26,8 @@ describe("core/xp.lua", function()
         it("a brand-new database ends up on the current version", function()
             local db = Ledger.InitDB(nil, Ledger.DEFAULTS)
 
-            assert.are.equal(6, db.version)
-            assert.are.equal(6, Ledger.DB_VERSION)
+            assert.are.equal(7, db.version)
+            assert.are.equal(7, Ledger.DB_VERSION)
         end)
 
         it("migrates a v1 database (no version) to the current one without losing its data", function()
@@ -35,7 +35,7 @@ describe("core/xp.lua", function()
 
             Ledger.InitDB(db, Ledger.DEFAULTS)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.is_true(db.shown)
         end)
     end)
@@ -44,7 +44,7 @@ describe("core/xp.lua", function()
         it("nil table: creates the full structure from scratch", function()
             local db = Ledger.InitCharDB(nil)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.are.same({}, db.levels)
             assert.are.same({}, db.sessions)
             assert.are.equal(0, db.lastKnownTotalTimePlayed)
@@ -54,21 +54,21 @@ describe("core/xp.lua", function()
         it("empty table: fills in what's missing just like if it were nil", function()
             local db = Ledger.InitCharDB({})
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.are.same({}, db.levels)
             assert.are.same({}, db.sessions)
         end)
 
         it("table already populated on the current version: doesn't alter anything already there", function()
             local original = {
-                version  = 6,
+                version  = 7,
                 levels   = { [5] = { level = 5, totalXP = 100 } },
                 sessions = { { t0 = 1000, level = 6 } },
             }
 
             local db = Ledger.InitCharDB(original)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.are.same({ [5] = { level = 5, totalXP = 100 } }, db.levels)
             assert.are.same({ { t0 = 1000, level = 6 } }, db.sessions)
         end)
@@ -76,14 +76,14 @@ describe("core/xp.lua", function()
         it("table with an old version: migrates the version and keeps/creates the rest", function()
             local db = Ledger.InitCharDB({ version = 1, sessions = { { t0 = 1, level = 3 } } })
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.are.same({}, db.levels)
             -- The v3->v4 migration used to fill buckets with zero; v5->v6
             -- strips that back out (buckets are never stored on a
             -- session anymore, only derived on demand) and starts an
             -- empty state series instead. v4->v5 adds deaths=0.
             assert.are.same(
-                { { t0 = 1, level = 3, deaths = 0, st = {} } },
+                { { t0 = 1, level = 3, deaths = 0, stateSeries = {} } },
                 db.sessions)
         end)
     end)
@@ -98,7 +98,7 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             -- The v4->v5 pass translates src to a numeric ID in the same run.
             assert.are.same({
                 0, 50, Ledger.SRC_IDS.kill, 0,
@@ -112,7 +112,7 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.is_nil(session.e)
         end)
 
@@ -131,7 +131,7 @@ describe("core/xp.lua", function()
         it("a database with no sessions (LedgerDB) migrates its version without blowing up", function()
             local db = Ledger.InitDB({ version = 2, shown = true }, Ledger.DEFAULTS)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.is_true(db.shown)
         end)
     end)
@@ -143,15 +143,15 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.is_nil(session.buckets)
-            assert.are.same({}, session.st)
+            assert.are.same({}, session.stateSeries)
         end)
 
         it("a database with no sessions (LedgerDB) migrates without blowing up", function()
             local db = Ledger.InitDB({ version = 3, shown = true }, Ledger.DEFAULTS)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.is_true(db.shown)
         end)
     end)
@@ -207,7 +207,7 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.are.equal(3, db.levels[3].level)
             assert.are.equal(0, db.levels[3].deaths)
             assert.are.equal(0, db.levels[3].reached)
@@ -216,7 +216,7 @@ describe("core/xp.lua", function()
         it("a database with no sessions or levels (LedgerDB) migrates without blowing up", function()
             local db = Ledger.InitDB({ version = 4, shown = true }, Ledger.DEFAULTS)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.is_true(db.shown)
         end)
     end)
@@ -231,21 +231,21 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
             assert.is_nil(session.buckets)
-            assert.are.same({}, session.st)
+            assert.are.same({}, session.stateSeries)
         end)
 
         it("doesn't touch a session's state series if it already has samples", function()
-            local session = { t0 = 0, level = 10, e = {}, st = { 5, 5, 1 } }
+            local session = { t0 = 0, level = 10, e = {}, stateSeries = { 5, 5, 1 } }
             local db = { version = 5, sessions = { session } }
 
             Ledger.InitCharDB(db)
 
-            assert.are.same({ 5, 5, 1 }, session.st)
+            assert.are.same({ 5, 5, 1 }, session.stateSeries)
         end)
 
-        it("gives already-closed levels an empty stateSeries and freshly zeroed buckets in the new shape", function()
+        it("gives already-closed levels freshly zeroed buckets in the new shape (their series is then discarded by v6->v7)", function()
             local db = {
                 version = 5,
                 levels  = {
@@ -258,15 +258,83 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(6, db.version)
-            assert.are.same({}, db.levels[10].stateSeries)
+            assert.are.equal(7, db.version)
+            assert.is_nil(db.levels[10].stateSeries)
             assert.are.same({ active = 0, downtime = 0, travel = 0, dead = 0 }, db.levels[10].buckets)
         end)
 
         it("a database with no sessions or levels (LedgerDB) migrates without blowing up", function()
             local db = Ledger.InitDB({ version = 5, shown = true }, Ledger.DEFAULTS)
 
-            assert.are.equal(6, db.version)
+            assert.are.equal(7, db.version)
+            assert.is_true(db.shown)
+        end)
+    end)
+    describe("v6 -> v7 migration: raw series only for the level in progress", function()
+        it("renames the in-progress sessions' st to stateSeries without losing samples", function()
+            local session = { t0 = 0, level = 10, e = {}, st = { 1, 1, 2 } }
+            local db = { version = 6, sessions = { session } }
+
+            Ledger.InitCharDB(db)
+
+            assert.are.equal(7, db.version)
+            assert.are.same({ 1, 1, 2 }, session.stateSeries)
+            assert.is_nil(session.st)
+        end)
+
+        it("doesn't overwrite a stateSeries that already exists", function()
+            local session = { t0 = 0, level = 10, e = {}, st = { 9 }, stateSeries = { 1, 2 } }
+            local db = { version = 6, sessions = { session } }
+
+            Ledger.InitCharDB(db)
+
+            assert.are.same({ 1, 2 }, session.stateSeries)
+            assert.is_nil(session.st)
+        end)
+
+        it("discards a closed level's stateSeries, keeps its buckets and stamps the current thresholds", function()
+            local buckets = { active = 2, downtime = 1, travel = 0, dead = 0 }
+            local db = {
+                version = 6,
+                levels  = { [5] = { level = 5, stateSeries = { 1, 1, 0 }, buckets = buckets } },
+            }
+
+            Ledger.InitCharDB(db)
+
+            assert.is_nil(db.levels[5].stateSeries)
+            assert.are.same(buckets, db.levels[5].buckets)
+            assert.are.same(
+                { downtime = Ledger.DOWNTIME_THRESHOLD, sustainedMovement = Ledger.SUSTAINED_MOVEMENT_SECONDS },
+                db.levels[5].thresholds)
+        end)
+
+        it("a level with an empty series (no known thresholds) is discarded without inventing thresholds", function()
+            local db = {
+                version = 6,
+                levels  = { [4] = { level = 4, stateSeries = {}, buckets = { active = 0, downtime = 0, travel = 0, dead = 0 } } },
+            }
+
+            Ledger.InitCharDB(db)
+
+            assert.is_nil(db.levels[4].stateSeries)
+            assert.is_nil(db.levels[4].thresholds)
+        end)
+
+        it("doesn't overwrite thresholds a level already has", function()
+            local db = {
+                version = 6,
+                levels  = { [5] = { level = 5, stateSeries = { 1 }, thresholds = { downtime = 30, sustainedMovement = 5 } } },
+            }
+
+            Ledger.InitCharDB(db)
+
+            assert.are.same({ downtime = 30, sustainedMovement = 5 }, db.levels[5].thresholds)
+        end)
+
+        it("a database with no sessions or levels (LedgerDB) migrates without blowing up", function()
+            local db = Ledger.InitDB({ version = 6, shown = true }, Ledger.DEFAULTS)
+
+            assert.are.equal(7, db.version)
             assert.is_true(db.shown)
         end)
     end)

@@ -182,8 +182,9 @@ local function CloseCurrentLevel(t)
     local entry = Ledger.CloseLevel(sessions, totalPlayed, LedgerDB.includeRested)
     Ledger.RecordLevelClose(LedgerCharDB, entry)
     Ledger.Log("trace", string.format(
-        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%ds, deaths=%d",
-        entry.level, #sessions, entry.totalXP, entry.totalPlayed, entry.deaths))
+        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%ds (lastKnown=%s - levelStart=%s), deaths=%d",
+        entry.level, #sessions, entry.totalXP, entry.totalPlayed,
+        tostring(LedgerCharDB.lastKnownTotalTimePlayed), tostring(LedgerCharDB.levelStartTotalPlayed), entry.deaths))
 
     LedgerCharDB.sessions = {}
     sessions = LedgerCharDB.sessions
@@ -194,6 +195,8 @@ local function CloseCurrentLevel(t)
     -- close, and a fresh request so it updates as soon as possible
     -- (TIME_PLAYED_MSG arrives asynchronously: see the dispatcher).
     LedgerCharDB.levelStartTotalPlayed = LedgerCharDB.lastKnownTotalTimePlayed or 0
+    Ledger.Log("trace", string.format("LevelClose: next level's levelStartTotalPlayed advanced to %d",
+        LedgerCharDB.levelStartTotalPlayed))
     SafeRequestTimePlayed()
 
     matcher    = Ledger.NewMatcher()
@@ -359,8 +362,11 @@ C_Timer.NewTicker(1, FlushMatcher)
 -- membership is decided later, purely from this raw data
 -- (core/time_buckets.lua: Ledger.ComputeBucketsFromState), both when a
 -- level closes (core/level_close.lua) and live for the on-screen bar
--- (ui/time_bar.lua) -- so changing a threshold and running /ldg recalc
--- never loses anything, the raw sample is what's actually persisted.
+-- (ui/time_bar.lua) -- the raw sample is what's actually persisted (for
+-- the level in progress only: it's discarded once the level closes).
+-- Also refreshes session.tEnd every tick, so the active session always
+-- carries a persisted "last seen alive" time -- the denominator of its
+-- xp/hour (core/rate.lua) when read back from saved/exported data.
 ----------------------------------------------------------------------
 
 -- Some clients (confirmed 2026-09-18 on the WoW Forever beta) taint
@@ -401,6 +407,7 @@ local function SampleTimeState()
         taxi   = UnitOnTaxi("player"),
     })
     Ledger.AppendRecord(session, Ledger.SERIES.state, packed)
+    session.tEnd = time()
     Ledger.RedrawTimeBar()
 end
 

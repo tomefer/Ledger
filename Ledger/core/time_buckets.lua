@@ -6,11 +6,14 @@
 -- use any WoW API, the samples are always received as a parameter.
 --
 -- Split on purpose: the raw per-second sample is what actually gets
--- persisted (session.st, concatenated across a level's sessions into
--- entry.stateSeries on close -- core/level_close.lua), so changing a
--- threshold below and running /ldg recalc never invalidates history --
--- there is no live tracker object anymore, buckets are always DERIVED
--- from the raw series, on demand, by Ledger.ComputeBucketsFromState.
+-- persisted, but only for the level in progress (session.stateSeries).
+-- There is no live tracker object: buckets are always DERIVED from the
+-- raw series, on demand, by Ledger.ComputeBucketsFromState -- so the
+-- live bar always reflects today's thresholds. When a level closes
+-- (core/level_close.lua) its buckets are aggregated once, the raw
+-- series is DISCARDED, and the thresholds that produced those buckets
+-- are stored next to them (entry.thresholds) so two closed levels can
+-- be checked for comparability.
 
 local ADDON_NAME, Ledger = ...
 
@@ -113,8 +116,7 @@ end
 -- table: { downtime = seconds, sustainedMovement = seconds }, each
 -- defaulting to the constants above. This is the ONLY place bucket
 -- membership is decided; calling it again on the same raw data with
--- different thresholds (see /ldg recalc) recomputes history without
--- losing anything.
+-- different thresholds just gives the buckets those thresholds imply.
 --
 -- Priority per second, highest first: dead always wins (even mid-fight,
 -- a corpse isn't "active"); then combat itself; then sustained movement

@@ -6,7 +6,7 @@ local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/xp.lua")
 
-Ledger.DB_VERSION = 6
+Ledger.DB_VERSION = 7
 
 Ledger.DEFAULTS = {
     pos             = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
@@ -192,6 +192,47 @@ function Ledger.MigrateDB(db)
             end
         end
         version = 6
+    end
+
+    if version < 7 then
+        -- v6 -> v7: raw per-second state samples are kept only for the
+        -- level in progress (see core/level_close.lua). Two changes:
+        --   - the in-progress sessions' series key goes from "st" to
+        --     "stateSeries" (same name the closed levels' field had, so
+        --     there's a single name for it); the data is moved, never
+        --     dropped, unless a "stateSeries" already exists.
+        --   - already-closed levels DISCARD their stateSeries (the
+        --     buckets already derived from it stay) and get
+        --     entry.thresholds recorded. Only levels that actually had
+        --     samples get it: their buckets were derived with the
+        --     current constants, which is what's stamped. Levels with an
+        --     empty series (migrated from v5, zeroed buckets) have no
+        --     known thresholds and stay without the field.
+        if db.sessions then
+            for _, session in ipairs(db.sessions) do
+                if session.st ~= nil then
+                    if session.stateSeries == nil then
+                        session.stateSeries = session.st
+                    end
+                    session.st = nil
+                end
+                if not session.stateSeries then
+                    session.stateSeries = {}
+                end
+            end
+        end
+        if db.levels then
+            for _, entry in pairs(db.levels) do
+                if entry.stateSeries and #entry.stateSeries > 0 and not entry.thresholds then
+                    entry.thresholds = {
+                        downtime          = Ledger.DOWNTIME_THRESHOLD,
+                        sustainedMovement = Ledger.SUSTAINED_MOVEMENT_SECONDS,
+                    }
+                end
+                entry.stateSeries = nil
+            end
+        end
+        version = 7
     end
 
     db.version = version

@@ -110,11 +110,6 @@ SlashCmdList["LEDGER"] = function(msg)
         local shown = Ledger.ToggleTimeBar()
         Print("time-split bar: " .. (shown and "shown" or "hidden"))
 
-    elseif command == "recalc" then
-        local count = Ledger.RecalculateAllBuckets(LedgerCharDB)
-        Ledger.RedrawTimeBar()
-        Print(string.format("recalculated time buckets for %d closed level(s) using the current thresholds", count))
-
     elseif command == "rate" then
         local shown = Ledger.ToggleRateFrame()
         Print("xp/hour number: " .. (shown and "shown" or "hidden"))

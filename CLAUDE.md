@@ -74,13 +74,9 @@ vez de suponer.
   - `/ldg time`: muestra u oculta la barra de reparto de tiempo del
     nivel (active/downtime/travel/dead), independiente de `/ldg bar`
     (ver "Barra de reparto de tiempo" más abajo).
-  - `/ldg recalc`: recalcula `entry.buckets` de todos los niveles ya
-    cerrados a partir de su `entry.stateSeries` persistido, con los
-    umbrales vigentes ahora mismo (`Ledger.DOWNTIME_THRESHOLD`/
-    `Ledger.SUSTAINED_MOVEMENT_SECONDS`, ver "Buckets de tiempo" más
-    abajo). Es la razón de ser de guardar la serie cruda: cambiar un
-    umbral en el código y redesplegar no debe invalidar el historial ya
-    cerrado.
+  - (`/ldg recalc` ya no existe: se eliminó cuando la serie cruda pasó
+    a descartarse al cerrar cada nivel — ver "Buckets de tiempo" más
+    abajo; ya no hay nada que recalcular en los niveles cerrados.)
   - `/ldg rate`: muestra u oculta el número destacado de xp/hora de la
     sesión actual, anclado encima de la barra de composición de xp;
     pasar el ratón por encima abre un panel propio con el desglose
@@ -211,7 +207,15 @@ session = {
                offsets DENTRO de la sesión en curso (sessionStartRef,
                local a ui/xp_capture.lua, nunca persistido) — ver
                "Captura de eventos" más abajo>,
-    tEnd    = <time() ABSOLUTO de cierre, o nil mientras está activa>,
+    tEnd    = <time() ABSOLUTO: lo refresca cada segundo el ticker de
+               muestreo (ui/xp_capture.lua: SampleTimeState) mientras la
+               sesión es la activa, así que en la activa es "visto vivo
+               por última vez" (nunca nil una vez ha corrido un tick), y
+               en una cerrada se queda congelado en el último tick;
+               /ldg reset lo fija además al instante exacto del cierre.
+               Es el denominador del xp/hora de una sesión leída de
+               datos guardados/exportados (la UI en vivo usa time() tal
+               cual, ver core/rate.lua)>,
     level   = <nivel del jugador al iniciar la sesión>,
     reached = <time() ABSOLUTO del instante en que se empezó a rastrear
                este nivel: el ding real si lo disparó una subida de
@@ -226,7 +230,7 @@ session = {
     deaths  = 0,  -- contador de muertes DE ESTA SESIÓN (PLAYER_DEAD),
                    -- aparte del bucket de tiempo "dead": cuánto tiempo
                    -- se estuvo muerto no dice cuántas veces.
-    st = {
+    stateSeries = {
         -- array plano de la serie state (Ledger.SERIES.state, ver
         -- "Buckets de tiempo" abajo): un entero empaquetado por segundo
         -- (combat/moving/dead/taxi), muestreado en vivo por
@@ -250,12 +254,19 @@ session = {
 ### Buckets de tiempo (`core/time_buckets.lua`)
 
 **Rediseñado 2026-09-18**: pasa de un tracker en vivo con reclasificación
-retroactiva a **estado crudo muestreado + reglas de agregación puras**.
-El motivo es `/ldg recalc` (ver "Comandos" arriba): con el tracker
-anterior, un cambio de umbral no podía aplicarse al historial ya
-cerrado, porque lo único que sobrevivía era el bucket ya decidido, no
-la señal cruda que lo produjo. Ahora sí: lo que se persiste es la señal
-cruda, y el bucket siempre se DERIVA de ella, nunca se acumula en vivo.
+retroactiva a **estado crudo muestreado + reglas de agregación puras**:
+lo que se persiste es la señal cruda del nivel EN CURSO, y el bucket
+siempre se DERIVA de ella, nunca se acumula en vivo. **Ajustado
+2026-09-18 (análisis del SavedVariables real)**: la serie cruda solo
+vive mientras el nivel está en curso; al cerrarlo se agregan los
+buckets una vez y la serie se DESCARTA (guardarla entera en cada nivel
+cerrado no escala), guardando en su lugar los umbrales usados
+(`entry.thresholds`) para saber si dos niveles son comparables. Por eso
+`/ldg recalc` y `Ledger.RecalculateAllBuckets` se eliminaron: ya no hay
+serie cruda de niveles cerrados que reclasificar — un cambio de umbral
+solo afecta al nivel en curso (la barra en vivo se re-deriva siempre con
+los umbrales vigentes) y a los niveles que se cierren a partir de
+entonces.
 
 **1) Muestreo crudo** (`ui/xp_capture.lua: SampleTimeState`, ticker de
 1s independiente del que vacía el matcher): cada segundo lee 4 flags
@@ -268,8 +279,7 @@ instantáneos de verdad —
   vive en el muestreo, vive en la regla de agregación (ver más abajo).
 - `moving` = `GetUnitSpeed("player") > 0`, crudo e instantáneo también
   (sin filtrar aquí "sostenido 3s": eso también es una regla de
-  agregación, ver `Ledger.MarkSustainedRuns` más abajo — así
-  `/ldg recalc` puede reclasificar el historial si ese umbral cambia).
+  agregación, ver `Ledger.MarkSustainedRuns` más abajo).
   **Confirmado en el juego (WoW Forever beta, build 1.60.1, interface
   16001, 2026-09-18)**: este cliente marca el valor devuelto por
   `GetUnitSpeed` como "secret" — la llamada en sí no falla, pero
@@ -296,7 +306,9 @@ Los 4 booleanos se empaquetan en un único entero
 2 — Lua 5.1 no tiene operadores bitwise nativos, así que la
 pertenencia se comprueba con aritmética: `math.floor(v/flag) % 2`) y se
 añaden como un registro más de una nueva serie declarativa,
-`Ledger.SERIES.state` (`core/series.lua`, `key = "st"`, `stride = 1`,
+`Ledger.SERIES.state` (`core/series.lua`, `key = "stateSeries"`
+(antes `"st"`, unificado con el nombre que tenía en los niveles en la
+migración v6→v7), `stride = 1`,
 sin campo `off`: a diferencia de la serie `xp`, aquí la posición del
 array YA es el segundo — un nivel de dos horas son 7200 enteros
 pequeños). Se persiste con `Ledger.AppendRecord(session, Ledger.SERIES.state,
@@ -335,27 +347,27 @@ resucitar", `dead` se muestrea de forma continua e instantánea vía
 segundo ya cae solo en la regla que le toque).
 
 **3) Dónde vive la serie cruda y dónde se deriva el bucket**:
-- `session[Ledger.SERIES.state.key]` (`session.st`): la serie cruda DE
-  ESTA sesión. Ya no existe `session.buckets` en absoluto — los buckets
-  nunca se acumulan ni se guardan en una sesión, siempre se derivan.
+- `session[Ledger.SERIES.state.key]` (`session.stateSeries`): la serie
+  cruda DE ESTA sesión. Ya no existe `session.buckets` en absoluto — los
+  buckets nunca se acumulan ni se guardan en una sesión, siempre se
+  derivan.
 - Al cerrar un nivel, `core/level_close.lua: CloseLevel` concatena
-  `session.st` de TODAS las sesiones del nivel
-  (`Ledger.ConcatSeries(sessions, Ledger.SERIES.state)`) en
-  `entry.stateSeries` (nuevo campo persistido en `levels[level]`) y
-  calcula `entry.buckets = Ledger.ComputeBucketsFromState(entry.stateSeries)`.
-  `entry.stateSeries` se guarda precisamente para que `/ldg recalc`
-  pueda volver a derivar `entry.buckets` más tarde con otros umbrales,
-  sin necesitar las sesiones originales (que se descartan al cerrar el
-  nivel).
+  `session.stateSeries` de TODAS las sesiones del nivel
+  (`Ledger.ConcatSeries(sessions, Ledger.SERIES.state)`), calcula
+  `entry.buckets = Ledger.ComputeBucketsFromState(serie, umbrales)` UNA
+  vez y **descarta la serie**: la entrada de `levels` no lleva
+  `stateSeries`. Guarda `entry.thresholds = { downtime=, sustainedMovement= }`
+  con los umbrales que produjeron esos buckets (por defecto
+  `Ledger.DOWNTIME_THRESHOLD`/`Ledger.SUSTAINED_MOVEMENT_SECONDS`;
+  `CloseLevel` acepta un `thresholds` opcional que los sobrescribe), y
+  `/ldg dump` los muestra por nivel (`thresholds=downtime=15s/sustained=3s`,
+  o `unknown` si el nivel es de antes de guardarlos).
 - Para el nivel EN CURSO (barra de reparto de tiempo en vivo,
   `ui/time_bar.lua`), no hay tracker que "previsualizar": cada
   redibujado concatena `Ledger.SERIES.state` de
   `LedgerCharDB.sessions` tal cual y llama a
   `Ledger.ComputeBucketsFromState` de cero — barato (como mucho unos
   miles de enteros) y siempre exacto con los umbrales vigentes.
-- `Ledger.RecalculateAllBuckets(db)` (`core/level_close.lua`): recorre
-  `db.levels`, y para cada entrada con `stateSeries` no vacío
-  recalcula `entry.buckets` desde ahí. Es lo que dispara `/ldg recalc`.
 
 **`buckets` sigue siendo una métrica de reparto, NO de duración
 total**: `entry.totalPlayed` (ver "Entrada de `levels`" abajo) sigue
@@ -391,16 +403,15 @@ levels[level] = {
                                                     -- cada sesion; xp
                                                     -- efectiva, tambien
                                                     -- sujeta a includeRested
-    stateSeries = { ... },  -- serie state (Ledger.SERIES.state) de TODAS
-                    -- las sesiones del nivel, concatenada en orden
-                    -- (Ledger.ConcatSeries) -- se guarda para que
-                    -- /ldg recalc pueda re-derivar buckets más tarde con
-                    -- otros umbrales sin necesitar las sesiones
-                    -- originales (ver "Buckets de tiempo" arriba)
     buckets     = { active = 0, downtime = 0, travel = 0, dead = 0 },
-                    -- DERIVADO de stateSeries con
-                    -- Ledger.ComputeBucketsFromState, nunca sumado de un
-                    -- campo por sesión (las sesiones ya no lo tienen)
+                    -- DERIVADO UNA VEZ al cerrar, de la serie state de
+                    -- todas las sesiones del nivel, con
+                    -- Ledger.ComputeBucketsFromState; la serie cruda se
+                    -- descarta (no hay entry.stateSeries)
+    thresholds  = { downtime = 15, sustainedMovement = 3 },
+                    -- umbrales con los que se derivaron esos buckets,
+                    -- para saber si dos niveles son comparables; ausente
+                    -- en niveles migrados desde antes de guardarlos
 }
 ```
 
@@ -1235,7 +1246,7 @@ arriba:
 
 - `LedgerDB` (cuenta, `## SavedVariables`): `pos`, `shown`, `version`,
   `includeRested` (toggle de `/ldg rested`, `true` por defecto),
-  `barShown`/`barHeight`/`timeBarShown` (barras). `version` está en 6
+  `barShown`/`barHeight`/`timeBarShown` (barras). `version` está en 7
   (`Ledger.DB_VERSION`); `core/xp.lua: MigrateDB(db)` sube cualquier
   `db` por debajo de la versión actual:
   - v1→v2: solo estampa el número de versión (esquema previo a las
@@ -1280,7 +1291,7 @@ arriba:
     versión usan `time()` — ver "Sesión activa" arriba.
   - v5→v6 (rediseño de los buckets de tiempo, ver "Buckets de tiempo"
     arriba): `session.buckets` desaparece por completo (se pone a `nil`
-    si existía) y se garantiza `session.st = {}` si no existiera ya —
+    si existía) y se garantiza una serie de estado vacía (entonces `session.st`, hoy `session.stateSeries`) si no existiera ya —
     las sesiones en curso nunca vuelven a acumular buckets, solo
     muestrean crudo. Los niveles ya cerrados (`db.levels`) reciben
     `entry.stateSeries = {}` y `entry.buckets` recién puesto a cero en
@@ -1290,6 +1301,15 @@ arriba:
     es traducible a las reglas nuevas, así que no hay forma de
     reconstruirlo retroactivamente — mismo criterio que `rested = 0` en
     v2→v3.
+  - v6→v7 (análisis del SavedVariables real, 2026-09-18): la serie
+    cruda solo vive en el nivel en curso. Las sesiones en curso mueven
+    `session.st` a `session.stateSeries` (sin perder muestras; no pisa
+    una `stateSeries` que ya exista). Los niveles ya cerrados
+    DESCARTAN su `stateSeries` (los `buckets` ya derivados se quedan) y
+    reciben `entry.thresholds` con los umbrales vigentes solo si tenían
+    muestras (sus buckets se derivaron con esas constantes); un nivel
+    con serie vacía (migrado desde v5, buckets a cero) no tiene
+    umbrales conocidos y se queda sin el campo.
 - `LedgerCharDB` (por personaje, `## SavedVariablesPerCharacter`):
   `{ version, levels, sessions, lastKnownTotalTimePlayed,
   levelStartTotalPlayed }` (los dos últimos, ver "`totalPlayed` de un
@@ -1330,12 +1350,31 @@ falta en el `.toc`).
 
 ### Pendiente de definir (se irá completando en próximas sesiones)
 
-- `tEnd` solo se rellena hoy al cerrar por `/ldg reset` o al cerrar un
-  nivel (`CloseCurrentLevel` no lo toca en la sesión que cierra —
-  revisar si debería). Qué pasa con la sesión activa al hacer
-  logout/desconexión sin pasar por reset sigue sin decidir. Como
-  `sessions` ya es la SavedVariable real, una sesión sin `tEnd`
-  sobrevive tal cual al próximo login y se le sigue añadiendo eventos.
+- `tEnd` ya lo refresca el ticker de 1s en la sesión activa (ver "Sesión
+  activa"), así que tras un logout/desconexión sin pasar por reset queda
+  en el último segundo visto; al próximo login la sesión sigue abierta
+  y se le sigue añadiendo eventos (y el ticker vuelve a moverle `tEnd`).
+  Sigue sin decidir si al reabrir tras un hueco largo conviene abrir una
+  sesión nueva en vez de continuar la vieja.
+- **Comprobar en el juego `totalPlayed` tras el análisis del
+  SavedVariables real** (2026-09-18): se observó `levelStartTotalPlayed=3534`
+  con `lastKnownTotalTimePlayed=4343` (diferencia 809 = duración ya
+  registrada del nivel anterior, es decir, base un nivel por detrás).
+  El código de `CloseCurrentLevel` ya calcula `totalPlayed` con la base
+  vigente y DESPUÉS la avanza al total actual desde `1e8a942`, así que
+  se sospecha una build desplegada anterior; `CloseCurrentLevel` ahora
+  loguea a TRACE `lastKnown`/`levelStart` de cada cierre y el avance de
+  la base para poder confirmarlo. Si tras redesplegar sigue pasando, la
+  causa más probable es que `lastKnownTotalTimePlayed` esté obsoleto en
+  el instante del cierre (`RequestTimePlayed` es asíncrono, y llamarlo
+  periódicamente imprimiría "Total time played" en el chat): habría que
+  extrapolarlo con `time()` desde la última respuesta.
+- El sobrante de un cruce de nivel hereda el `src` del evento original
+  (`EmitCrossingEvent` usa `paired.src` en las dos mitades): un sobrante
+  `explore` en `off=0` del nivel nuevo solo puede venir de que el evento
+  original ya saliera mal clasificado (el bug quest→explore corregido
+  por cantidad, ver "Captura de eventos"), no de reclasificar el
+  sobrante. Confirmar con datos nuevos.
 - Confirmar en el juego (con la instrumentación TRACE) que la corrección
   del bug `src = "unknown"` (ver "Sistema de log" arriba) funciona con
   el resto de variantes reales de este cliente, no solo con el caso del
@@ -1405,9 +1444,12 @@ falta en el `.toc`).
   compatibilidad"); que `Ledger.ComputeBucketsFromState` clasifique bien
   en vivo (el hueco corto tras combate sigue contando `"active"`, un
   movimiento sostenido pasa a `"travel"` solo tras
-  `Ledger.SUSTAINED_MOVEMENT_SECONDS`, la muerte gana siempre); y que
-  `/ldg recalc` recalcule de verdad `levels[level].buckets` desde
-  `entry.stateSeries` sin tocar nada más.
+  `Ledger.SUSTAINED_MOVEMENT_SECONDS`, la muerte gana siempre); que la
+  serie guardada en `session.stateSeries` tenga combinaciones de bits
+  (no solo 0/1/2: en un análisis del SavedVariables solo aparecían esos
+  tres valores, lo que casaba con una build anterior al muestreo crudo
+  — descartar tras redesplegar), y que un nivel recién cerrado no lleve
+  `stateSeries` y sí `thresholds`.
 - Ver visualmente en el juego la barra de reparto de tiempo (nunca
   probada): anclaje 2px por encima de la barra de xp, el orden fijo
   active/downtime/travel/dead, los colores (incluidos los que reutilizan

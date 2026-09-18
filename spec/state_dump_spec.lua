@@ -73,5 +73,17 @@ describe("core/state_dump.lua", function()
             assert.is_not_nil(pos12)
             assert.is_true(pos7 < pos12)
         end)
+
+        it("shows the thresholds a level's buckets were derived with, or unknown", function()
+            local levels = {
+                [7]  = { level = 7, totalXP = 200, totalPlayed = 300, thresholds = { downtime = 15, sustainedMovement = 3 } },
+                [12] = { level = 12, totalXP = 500, totalPlayed = 600 },
+            }
+
+            local text = Ledger.FormatState({ levels = levels })
+
+            assert.is_not_nil(text:find("thresholds=downtime=15s/sustained=3s", 1, true))
+            assert.is_not_nil(text:find("thresholds=unknown", 1, true))
+        end)
     end)
 end)

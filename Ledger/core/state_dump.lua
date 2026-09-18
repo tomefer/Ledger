@@ -71,8 +71,13 @@ local function FormatLevels(levels)
     local lines = { "Closed levels:" }
     for _, level in ipairs(levelNumbers) do
         local entry = levels[level]
-        table.insert(lines, string.format("  level %s: xp=%d, rested=%d, time=%ds, deaths=%d",
-            tostring(entry.level), entry.totalXP, entry.totalRested or 0, entry.totalPlayed, entry.deaths or 0))
+        local thresholds = "unknown"
+        if entry.thresholds then
+            thresholds = string.format("downtime=%ss/sustained=%ss",
+                tostring(entry.thresholds.downtime), tostring(entry.thresholds.sustainedMovement))
+        end
+        table.insert(lines, string.format("  level %s: xp=%d, rested=%d, time=%ds, deaths=%d, thresholds=%s",
+            tostring(entry.level), entry.totalXP, entry.totalRested or 0, entry.totalPlayed, entry.deaths or 0, thresholds))
     end
     return table.concat(lines, "\n")
 end

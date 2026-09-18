@@ -52,16 +52,17 @@ end
 -- affects totalRested, which is always the real accumulated bonus, nor
 -- bySource, which stays the breakdown of the total xp as-is.
 --
--- Time buckets are never summed from a per-session accumulator anymore:
--- entry.stateSeries is the level's raw per-second state series (every
--- session's Ledger.SERIES.state slice, concatenated in order) and
--- entry.buckets is DERIVED from it (Ledger.ComputeBucketsFromState,
--- core/time_buckets.lua) using today's thresholds. stateSeries is kept
--- alongside the derived buckets specifically so /ldg recalc
--- (Ledger.RecalculateAllBuckets below) can redo that derivation later
--- with different thresholds, without needing the original sessions
--- (which get discarded once the level closes).
-function Ledger.CloseLevel(sessions, totalPlayed, includeRested)
+-- Time buckets are never summed from a per-session accumulator: the
+-- level's raw per-second state series (every session's
+-- Ledger.SERIES.state slice, concatenated in order) is aggregated ONCE
+-- here by Ledger.ComputeBucketsFromState (core/time_buckets.lua) into
+-- entry.buckets, and then discarded -- raw samples only live for the
+-- level in progress. entry.thresholds records the thresholds that
+-- produced those buckets ({ downtime=, sustainedMovement= }; `thresholds`
+-- is an optional override, each field defaulting to the current
+-- Ledger.DOWNTIME_THRESHOLD/Ledger.SUSTAINED_MOVEMENT_SECONDS), so a
+-- level closed under other thresholds can be told apart.
+function Ledger.CloseLevel(sessions, totalPlayed, includeRested, thresholds)
     local totalXP     = 0
     local totalRested = 0
     local deaths      = 0
@@ -89,7 +90,11 @@ function Ledger.CloseLevel(sessions, totalPlayed, includeRested)
         curve[minute] = minuteXP[minute] or 0
     end
 
-    local stateSeries = Ledger.ConcatSeries(sessions, STATE_SERIES)
+    local usedThresholds = {
+        downtime          = (thresholds and thresholds.downtime) or Ledger.DOWNTIME_THRESHOLD,
+        sustainedMovement = (thresholds and thresholds.sustainedMovement) or Ledger.SUSTAINED_MOVEMENT_SECONDS,
+    }
+    local buckets = Ledger.ComputeBucketsFromState(Ledger.ConcatSeries(sessions, STATE_SERIES), usedThresholds)
 
     return {
         level       = sessions[1].level,
@@ -100,8 +105,8 @@ function Ledger.CloseLevel(sessions, totalPlayed, includeRested)
         deaths      = deaths,
         bySource    = bySource,
         curve       = curve,
-        stateSeries = stateSeries,
-        buckets     = Ledger.ComputeBucketsFromState(stateSeries),
+        buckets     = buckets,
+        thresholds  = usedThresholds,
     }
 end
 
@@ -114,26 +119,4 @@ end
 function Ledger.RecordLevelClose(db, entry)
     db.levels = db.levels or {}
     db.levels[entry.level] = entry
-end
-
--- Recomputes entry.buckets for every already-closed level in db (shaped
--- like LedgerCharDB) from its persisted entry.stateSeries, using
--- whatever Ledger.DOWNTIME_THRESHOLD/Ledger.SUSTAINED_MOVEMENT_SECONDS
--- stand as right now (core/time_buckets.lua). This is the whole reason
--- that raw series gets kept: changing a threshold and running /ldg
--- recalc redoes the classification over history without losing
--- anything, because the raw sample -- not the derived bucket -- is what
--- was actually persisted. A level with no stateSeries (data from before
--- this capability existed, see the v5->v6 migration in core/xp.lua) is
--- left untouched: there's no raw data to recompute from. Returns how
--- many levels were recalculated.
-function Ledger.RecalculateAllBuckets(db)
-    local count = 0
-    for _, entry in pairs((db or {}).levels or {}) do
-        if entry.stateSeries and #entry.stateSeries > 0 then
-            entry.buckets = Ledger.ComputeBucketsFromState(entry.stateSeries)
-            count = count + 1
-        end
-    end
-    return count
 end

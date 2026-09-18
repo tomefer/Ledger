@@ -151,7 +151,7 @@ describe("core/level_close.lua", function()
             assert.are.equal(45, entry.totalPlayed)
             assert.are.same({}, entry.bySource)
             assert.are.same({}, entry.curve)
-            assert.are.same({}, entry.stateSeries)
+            assert.is_nil(entry.stateSeries)
             assert.are.same({ active = 0, downtime = 0, travel = 0, dead = 0 }, entry.buckets)
         end)
     end)
@@ -167,7 +167,6 @@ describe("core/level_close.lua", function()
 
             local entry = Ledger.CloseLevel({ a, b }, 3)
 
-            assert.are.same({ 1, 1, 4 }, entry.stateSeries) -- packed: combat=1, combat=1, dead=4
             assert.are.equal(2, entry.buckets.active)
             assert.are.equal(1, entry.buckets.dead)
         end)
@@ -179,39 +178,44 @@ describe("core/level_close.lua", function()
 
             local entry = Ledger.CloseLevel({ a, b }, 10)
 
-            assert.are.same({ 1 }, entry.stateSeries)
             assert.are.equal(1, entry.buckets.active)
         end)
-    end)
 
-    describe("RecalculateAllBuckets", function()
-        it("recomputes entry.buckets from entry.stateSeries for every closed level", function()
-            local db = {
-                levels = {
-                    [5]  = { level = 5, stateSeries = { Ledger.PackStateFlags({ combat = true }) }, buckets = Ledger.NewEmptyBuckets() },
-                    [6]  = { level = 6, stateSeries = { Ledger.PackStateFlags({ dead = true }) }, buckets = Ledger.NewEmptyBuckets() },
-                },
-            }
+        it("discards the raw series: the entry never carries it", function()
+            local a = Ledger.NewSession(0, 7)
+            Ledger.AppendRecord(a, Ledger.SERIES.state, Ledger.PackStateFlags({ combat = true }))
 
-            local count = Ledger.RecalculateAllBuckets(db)
+            local entry = Ledger.CloseLevel({ a }, 1)
 
-            assert.are.equal(2, count)
-            assert.are.equal(1, db.levels[5].buckets.active)
-            assert.are.equal(1, db.levels[6].buckets.dead)
+            assert.is_nil(entry.stateSeries)
         end)
 
-        it("leaves a level with no stateSeries untouched", function()
-            local db = { levels = { [5] = { level = 5, buckets = { active = 9, downtime = 0, travel = 0, dead = 0 } } } }
+        it("records the current thresholds the buckets were derived with", function()
+            local a = Ledger.NewSession(0, 7)
 
-            local count = Ledger.RecalculateAllBuckets(db)
+            local entry = Ledger.CloseLevel({ a }, 1)
 
-            assert.are.equal(0, count)
-            assert.are.equal(9, db.levels[5].buckets.active)
+            assert.are.same(
+                { downtime = Ledger.DOWNTIME_THRESHOLD, sustainedMovement = Ledger.SUSTAINED_MOVEMENT_SECONDS },
+                entry.thresholds)
         end)
 
-        it("an empty or missing db doesn't blow up", function()
-            assert.are.equal(0, Ledger.RecalculateAllBuckets({}))
-            assert.are.equal(0, Ledger.RecalculateAllBuckets(nil))
+        it("an explicit threshold override is both applied to the buckets and recorded", function()
+            -- 1 second of combat, then 3 quiet seconds: with downtime=2
+            -- the third quiet second is already downtime; with the
+            -- default 15 all three would stay "active".
+            local a = Ledger.NewSession(0, 7)
+            local combat = Ledger.PackStateFlags({ combat = true })
+            for _, v in ipairs({ combat, 0, 0, 0 }) do
+                Ledger.AppendRecord(a, Ledger.SERIES.state, v)
+            end
+
+            local entry = Ledger.CloseLevel({ a }, 4, true, { downtime = 2 })
+
+            assert.are.equal(3, entry.buckets.active)   -- combat + 2 quiet seconds
+            assert.are.equal(1, entry.buckets.downtime)
+            assert.are.equal(2, entry.thresholds.downtime)
+            assert.are.equal(Ledger.SUSTAINED_MOVEMENT_SECONDS, entry.thresholds.sustainedMovement)
         end)
     end)
 
