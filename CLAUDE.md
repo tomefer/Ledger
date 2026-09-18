@@ -270,6 +270,21 @@ instantáneos de verdad —
   (sin filtrar aquí "sostenido 3s": eso también es una regla de
   agregación, ver `Ledger.MarkSustainedRuns` más abajo — así
   `/ldg recalc` puede reclasificar el historial si ese umbral cambia).
+  **Confirmado en el juego (WoW Forever beta, build 1.60.1, interface
+  16001, 2026-09-18)**: este cliente marca el valor devuelto por
+  `GetUnitSpeed` como "secret" — la llamada en sí no falla, pero
+  compararlo (`> 0`) revienta con `attempt to compare a secret number
+  value (execution tainted by 'Ledger')`, tainting nativo del motor
+  contra código de addon inseguro, no un `pcall` normal de API
+  ausente. `ui/xp_capture.lua: IsPlayerMoving()` envuelve también la
+  comparación en su propio `pcall` y degrada a "no se mueve" con un
+  aviso ERROR una sola vez por sesión — a diferencia del modo
+  degradado de la barra de xp (INFO, modo soportado), esto SÍ es una
+  pérdida real de datos: el bucket `travel` no se puede detectar en
+  absoluto en este cliente mientras siga así. Sin confirmar todavía si
+  Classic Era (1.15.x) tiene el mismo tainting o es exclusivo de esta
+  build de WoW Forever; añadir a `/ldg probe` si hace falta distinguir
+  entre "ausente" y "secreto" de un vistazo.
 - `dead` = `UnitIsDeadOrGhost("player")` — sustituye por completo a los
   antiguos handlers `PLAYER_DEAD`/`PLAYER_UNGHOST` para este propósito
   (`PLAYER_DEAD` se mantiene SOLO para el contador `deaths`, que es una

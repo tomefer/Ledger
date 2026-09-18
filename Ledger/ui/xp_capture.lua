@@ -347,13 +347,40 @@ C_Timer.NewTicker(1, FlushMatcher)
 -- never loses anything, the raw sample is what's actually persisted.
 ----------------------------------------------------------------------
 
+-- Some clients (confirmed 2026-09-18 on the WoW Forever beta) taint
+-- GetUnitSpeed's return as a "secret value": the call itself succeeds,
+-- but comparing it (`> 0`) throws "attempt to compare a secret number
+-- value (execution tainted by 'Ledger')" -- unlike an absent API, this
+-- isn't caught by wrapping just the call in pcall, the comparison
+-- itself needs its own pcall. Degrades to "not moving" and warns once
+-- per session at ERROR (not the xp bar's INFO-level degraded anchor:
+-- this isn't a supported fallback, it means the "travel" time bucket
+-- can't be detected at all in this client -- see CLAUDE.md Pendiente).
+local warnedSecretSpeed = false
+local function IsPlayerMoving()
+    local ok, speed = pcall(GetUnitSpeed, "player")
+    if not ok then return false end
+
+    local cmpOk, moving = pcall(function() return (speed or 0) > 0 end)
+    if not cmpOk then
+        if not warnedSecretSpeed then
+            Ledger.Log("error",
+                "GetUnitSpeed(\"player\") returned a secret value this client won't let us compare (" ..
+                tostring(moving) .. ") -- movement-based 'travel' bucket detection is disabled for this session.")
+            warnedSecretSpeed = true
+        end
+        return false
+    end
+    return moving
+end
+
 local function SampleTimeState()
     local session = CurrentSession()
     if not session then return end
 
     local packed = Ledger.PackStateFlags({
         combat = UnitAffectingCombat("player"),
-        moving = (GetUnitSpeed("player") or 0) > 0,
+        moving = IsPlayerMoving(),
         dead   = UnitIsDeadOrGhost("player"),
         taxi   = UnitOnTaxi("player"),
     })
