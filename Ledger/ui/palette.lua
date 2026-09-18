@@ -25,11 +25,11 @@ Ledger.PALETTE = {
     dead   = { 0x8B/255, 0x3A/255, 0x3A/255 }, -- #8B3A3A, muted dark red
 }
 
--- active and idle REUSE kill/unknown's color (same concept: productive
--- time / "we don't know"), not a copy of the same hex: if kill or
--- unknown ever change, these follow automatically.
-Ledger.PALETTE.active = Ledger.PALETTE.kill
-Ledger.PALETTE.idle   = Ledger.PALETTE.unknown
+-- active and downtime REUSE kill/unknown's color (same concept:
+-- productive time / "we don't know"), not a copy of the same hex: if
+-- kill or unknown ever change, these follow automatically.
+Ledger.PALETTE.active   = Ledger.PALETTE.kill
+Ledger.PALETTE.downtime = Ledger.PALETTE.unknown
 
 -- The xp bar's initial segment ("xp earned before tracking started")
 -- is, in essence, "we don't know": same gray as unknown.

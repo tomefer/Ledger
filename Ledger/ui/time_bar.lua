@@ -2,8 +2,8 @@
 -- Current level's time-split bar: parallel to the xp composition bar
 -- (same width and horizontal position, same height, 2px gap above it),
 -- with the 4 core/time_buckets.lua buckets in a fixed order (active,
--- travel, idle, dead). PROPORTIONAL axis: always occupies 100% of the
--- width, not comparable pixel-to-pixel with the xp bar (different
+-- downtime, travel, dead). PROPORTIONAL axis: always occupies 100% of
+-- the width, not comparable pixel-to-pixel with the xp bar (different
 -- axes). Thin layer: segment computation and tooltip formatting live in
 -- core/, this file only paints with reusable textures (one fixed per
 -- bucket: they're always the same 4, in the same order, so unlike the
@@ -101,35 +101,21 @@ local function PaintSegments(segments)
 end
 
 ----------------------------------------------------------------------
--- Data: all of the current level's sessions (same as the xp bar), with
--- the in-progress session using the tracker's live preview
--- (core/time_buckets.lua: Ledger.PreviewBuckets) so the bar appears to
--- grow every second without mutating anything.
+-- Data: all of the current level's sessions (same as the xp bar),
+-- concatenated (core/series.lua: Ledger.ConcatSeries) and derived fresh
+-- every redraw (core/time_buckets.lua: Ledger.ComputeBucketsFromState)
+-- -- no live tracker to preview: the raw per-second sample IS the data,
+-- appended for real every second by ui/xp_capture.lua's sampler, so the
+-- bar already grows on its own without any special-casing here.
 ----------------------------------------------------------------------
 
 local function CurrentBuckets()
-    local totals = Ledger.NewEmptyBuckets()
-    local sessions = LedgerCharDB.sessions
-    local currentSession = sessions[#sessions]
-    local now = GetTime()
-
-    for _, session in ipairs(sessions) do
-        local buckets = session.buckets
-        if buckets then
-            if session == currentSession and Ledger.timeTracker then
-                buckets = Ledger.PreviewBuckets(Ledger.timeTracker, now)
-            end
-            for _, bucket in ipairs(Ledger.TIME_BUCKET_ORDER) do
-                totals[bucket] = totals[bucket] + (buckets[bucket] or 0)
-            end
-        end
-    end
-
-    return totals
+    local rawState = Ledger.ConcatSeries(LedgerCharDB.sessions, Ledger.SERIES.state)
+    return Ledger.ComputeBucketsFromState(rawState)
 end
 
--- Redraw: called from the same 1s ticker that feeds the buckets
--- (ui/xp_capture.lua), never from xp events -- travel/idle/dead
+-- Redraw: called from the same 1s ticker that samples the raw state
+-- (ui/xp_capture.lua), never from xp events -- travel/downtime/dead
 -- stretches don't generate any, and tying it to kills would leave the
 -- bar frozen most of the time.
 function Ledger.RedrawTimeBar()

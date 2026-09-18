@@ -6,7 +6,7 @@ local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/xp.lua")
 
-Ledger.DB_VERSION = 5
+Ledger.DB_VERSION = 6
 
 Ledger.DEFAULTS = {
     pos             = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
@@ -156,6 +156,42 @@ function Ledger.MigrateDB(db)
             end
         end
         version = 5
+    end
+
+    if version < 6 then
+        -- v5 -> v6: replaces the tracker-based time buckets (seconds
+        -- accumulated live from AddSample calls on active/idle
+        -- transitions) with a raw per-second sampled state series
+        -- (Ledger.SERIES.state: combat/moving/dead/taxi flags packed
+        -- into one integer per second) plus buckets DERIVED from it on
+        -- demand (Ledger.ComputeBucketsFromState, core/time_buckets.lua)
+        -- -- see CLAUDE.md "Buckets de tiempo". There's no raw
+        -- per-second sample to reconstruct retroactively for time
+        -- already tracked under the old scheme, so:
+        --   - in-progress sessions (db.sessions) drop their old
+        --     `buckets` field entirely (buckets are never stored on a
+        --     session anymore, only derived) and get an empty state
+        --     series to start sampling into, unless one already exists.
+        --   - already-closed levels (db.levels) get an empty
+        --     `stateSeries` and a freshly zeroed `buckets` in the new
+        --     shape (active/downtime/travel/dead) -- the old
+        --     active/idle/travel split isn't translatable into the new
+        --     rules, they classify different raw signals.
+        if db.sessions then
+            for _, session in ipairs(db.sessions) do
+                session.buckets = nil
+                if not session[Ledger.SERIES.state.key] then
+                    session[Ledger.SERIES.state.key] = {}
+                end
+            end
+        end
+        if db.levels then
+            for _, entry in pairs(db.levels) do
+                entry.stateSeries = entry.stateSeries or {}
+                entry.buckets = Ledger.NewEmptyBuckets()
+            end
+        end
+        version = 6
     end
 
     db.version = version

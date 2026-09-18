@@ -136,7 +136,7 @@ describe("core/export.lua", function()
                     [11] = {
                         level = 11, reached = 900, totalXP = 5000, totalRested = 200, totalPlayed = 3600,
                         deaths = 2, bySource = { kill = 4000, quest = 1000 }, curve = { 100, 200, 50 },
-                        buckets = { active = 1000, idle = 500, travel = 2000, dead = 100 },
+                        buckets = { active = 1000, downtime = 500, travel = 2000, dead = 100 },
                     },
                 },
             }

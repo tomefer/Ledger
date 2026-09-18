@@ -10,18 +10,18 @@ describe("core/time_bar.lua", function()
 
     describe("ComputeTimeBarSegments", function()
         it("with total 0 there are no segments", function()
-            local segments = Ledger.ComputeTimeBarSegments({ active = 0, travel = 0, idle = 0, dead = 0 }, 200)
+            local segments = Ledger.ComputeTimeBarSegments({ active = 0, travel = 0, downtime = 0, dead = 0 }, 200)
             assert.are.same({}, segments)
         end)
 
-        it("splits proportionally and respects the fixed active/travel/idle/dead order", function()
-            local buckets = { active = 50, travel = 20, idle = 20, dead = 10 }
+        it("splits proportionally and respects the fixed active/downtime/travel/dead order", function()
+            local buckets = { active = 50, travel = 20, downtime = 20, dead = 10 }
             local segments = Ledger.ComputeTimeBarSegments(buckets, 100)
 
             assert.are.equal(4, #segments)
             assert.are.equal("active", segments[1].bucket)
-            assert.are.equal("travel", segments[2].bucket)
-            assert.are.equal("idle", segments[3].bucket)
+            assert.are.equal("downtime", segments[2].bucket)
+            assert.are.equal("travel", segments[3].bucket)
             assert.are.equal("dead", segments[4].bucket)
 
             assert.are.equal(50, segments[1].width)
@@ -32,15 +32,15 @@ describe("core/time_bar.lua", function()
 
         it("keeps the fixed order even when the largest bucket isn't active", function()
             -- dead is the largest, but it must still show up last.
-            local buckets = { active = 5, travel = 5, idle = 5, dead = 85 }
+            local buckets = { active = 5, travel = 5, downtime = 5, dead = 85 }
             local segments = Ledger.ComputeTimeBarSegments(buckets, 100)
 
-            assert.are.same({ "active", "travel", "idle", "dead" },
+            assert.are.same({ "active", "downtime", "travel", "dead" },
                 { segments[1].bucket, segments[2].bucket, segments[3].bucket, segments[4].bucket })
         end)
 
         it("offsets are cumulative and contiguous", function()
-            local buckets = { active = 50, travel = 20, idle = 20, dead = 10 }
+            local buckets = { active = 50, travel = 20, downtime = 20, dead = 10 }
             local segments = Ledger.ComputeTimeBarSegments(buckets, 100)
 
             assert.are.equal(0, segments[1].offset)
@@ -50,7 +50,7 @@ describe("core/time_bar.lua", function()
         end)
 
         it("the sum of widths never exceeds the total width, even with an inexact split", function()
-            local buckets = { active = 1, travel = 1, idle = 1, dead = 0 }
+            local buckets = { active = 1, travel = 1, downtime = 1, dead = 0 }
             local segments = Ledger.ComputeTimeBarSegments(buckets, 10)
 
             local total = 0
@@ -81,20 +81,21 @@ describe("core/time_bar.lua", function()
 
     describe("FormatTimeBarTooltip", function()
         it("one line per bucket, in the fixed order, with hh:mm:ss and percentage", function()
-            local buckets = { active = 3600, travel = 1800, idle = 0, dead = 0 }
+            local buckets = { active = 3600, travel = 1800, downtime = 0, dead = 0 }
             local lines = Ledger.FormatTimeBarTooltip(buckets)
 
             assert.are.equal(4, #lines)
             assert.are.equal("active", lines[1].bucket)
             assert.is_not_nil(lines[1].text:find("01:00:00", 1, true))
             assert.is_not_nil(lines[1].text:find("66.7%", 1, true))
-            assert.are.equal("travel", lines[2].bucket)
-            assert.is_not_nil(lines[2].text:find("00:30:00", 1, true))
-            assert.is_not_nil(lines[2].text:find("33.3%", 1, true))
+            assert.are.equal("downtime", lines[2].bucket)
+            assert.are.equal("travel", lines[3].bucket)
+            assert.is_not_nil(lines[3].text:find("00:30:00", 1, true))
+            assert.is_not_nil(lines[3].text:find("33.3%", 1, true))
         end)
 
         it("with the total at 0 doesn't blow up and gives 0%", function()
-            local lines = Ledger.FormatTimeBarTooltip({ active = 0, travel = 0, idle = 0, dead = 0 })
+            local lines = Ledger.FormatTimeBarTooltip({ active = 0, travel = 0, downtime = 0, dead = 0 })
 
             for _, line in ipairs(lines) do
                 assert.is_not_nil(line.text:find("0.0%", 1, true))

@@ -14,7 +14,8 @@ local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/export.lua")
 
-local XP_SERIES = Ledger.SERIES.xp
+local XP_SERIES    = Ledger.SERIES.xp
+local STATE_SERIES = Ledger.SERIES.state
 
 -- Above this many raw xp events (summed across every in-progress
 -- session), a detailed export gets big enough to make the export
@@ -148,7 +149,10 @@ function Ledger.BuildExportModel(charDB)
             deaths      = session.deaths or 0,
             reached     = session.reached or 0,
             initialXP   = session.initialXP or 0,
-            buckets     = session.buckets or Ledger.NewEmptyBuckets(),
+            -- Sessions never store buckets anymore (see
+            -- core/time_buckets.lua): derived on the spot from this
+            -- session's own slice of the raw state series.
+            buckets     = Ledger.ComputeBucketsFromState(session[STATE_SERIES.key] or {}),
             eventCount  = Ledger.RecordCount(session, XP_SERIES),
             totalXP     = Ledger.TotalXP(session),
             totalRested = Ledger.TotalRested(session),
@@ -183,7 +187,7 @@ end
 -- order in Lua): keeps the output deterministic, which is both nicer
 -- to read and easier to test.
 local BY_SOURCE_ORDER = { "kill", "quest", "explore", "unknown" }
-local BUCKET_ORDER     = { "active", "idle", "travel", "dead" }
+local BUCKET_ORDER     = { "active", "downtime", "travel", "dead" }
 
 local function JSONBySource(bySource)
     local parts = {}

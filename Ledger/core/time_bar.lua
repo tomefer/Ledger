@@ -1,11 +1,11 @@
 -- Ledger - core/time_bar.lua
 -- Computes the level's time-split bar segments: the 4
--- core/time_buckets.lua buckets (active, travel, idle, dead) in a fixed
--- order, with width proportional to their share of the total time.
--- Unlike the xp bar, here the axis is always 100% of the width (no
--- external max nor prior xp): it's not comparable pixel-to-pixel with
--- the xp bar, they're different axes. Pure logic: does not use any WoW
--- API.
+-- core/time_buckets.lua buckets (active, downtime, travel, dead) in a
+-- fixed order, with width proportional to their share of the total
+-- time. Unlike the xp bar, here the axis is always 100% of the width
+-- (no external max nor prior xp): it's not comparable pixel-to-pixel
+-- with the xp bar, they're different axes. Pure logic: does not use any
+-- WoW API.
 
 local ADDON_NAME, Ledger = ...
 
@@ -13,13 +13,13 @@ print("Ledger: core/time_bar.lua")
 
 -- Fixed left-to-right order, always the same -- so the shape is
 -- recognizable at a glance, never reordered by size.
-Ledger.TIME_BUCKET_ORDER = { "active", "travel", "idle", "dead" }
+Ledger.TIME_BUCKET_ORDER = { "active", "downtime", "travel", "dead" }
 
 local function TotalSeconds(buckets)
-    return buckets.active + buckets.travel + buckets.idle + buckets.dead
+    return buckets.active + buckets.downtime + buckets.travel + buckets.dead
 end
 
--- buckets: { active=, travel=, idle=, dead= } (seconds). widthPx: the
+-- buckets: { active=, downtime=, travel=, dead= } (seconds). widthPx: the
 -- bar's total width. Returns a list in Ledger.TIME_BUCKET_ORDER:
 -- { bucket=, offset=, width= } (offset/width in pixels). If the total
 -- is 0 (level just started, no samples yet), there are no segments to
@@ -47,10 +47,10 @@ function Ledger.ComputeTimeBarSegments(buckets, widthPx)
 end
 
 local BUCKET_LABELS = {
-    active = "Combat",
-    travel = "Travel",
-    idle   = "Idle",
-    dead   = "Dead",
+    active   = "Combat",
+    travel   = "Travel",
+    downtime = "Downtime",
+    dead     = "Dead",
 }
 
 -- Formats seconds as hh:mm:ss (no limit on hours).

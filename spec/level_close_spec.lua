@@ -151,32 +151,67 @@ describe("core/level_close.lua", function()
             assert.are.equal(45, entry.totalPlayed)
             assert.are.same({}, entry.bySource)
             assert.are.same({}, entry.curve)
-            assert.are.same({ active = 0, idle = 0, travel = 0, dead = 0 }, entry.buckets)
+            assert.are.same({}, entry.stateSeries)
+            assert.are.same({ active = 0, downtime = 0, travel = 0, dead = 0 }, entry.buckets)
         end)
     end)
 
     describe("time buckets", function()
-        it("sums the buckets across all the level's sessions", function()
+        it("derives buckets from the raw state series concatenated across all the level's sessions", function()
             local a = Ledger.NewSession(0, 7)
-            a.buckets = { active = 100, idle = 20, travel = 30, dead = 0 }
+            Ledger.AppendRecord(a, Ledger.SERIES.state, Ledger.PackStateFlags({ combat = true }))
+            Ledger.AppendRecord(a, Ledger.SERIES.state, Ledger.PackStateFlags({ combat = true }))
 
             local b = Ledger.NewSession(5000, 7)
-            b.buckets = { active = 40, idle = 10, travel = 0, dead = 15 }
+            Ledger.AppendRecord(b, Ledger.SERIES.state, Ledger.PackStateFlags({ dead = true }))
 
-            local entry = Ledger.CloseLevel({ a, b }, 215)
+            local entry = Ledger.CloseLevel({ a, b }, 3)
 
-            assert.are.same({ active = 140, idle = 30, travel = 30, dead = 15 }, entry.buckets)
+            assert.are.same({ 1, 1, 4 }, entry.stateSeries) -- packed: combat=1, combat=1, dead=4
+            assert.are.equal(2, entry.buckets.active)
+            assert.are.equal(1, entry.buckets.dead)
         end)
 
-        it("a session with no buckets (old schema before migrating) doesn't blow up", function()
+        it("a session with an empty state series (nothing sampled yet) doesn't blow up", function()
             local a = Ledger.NewSession(0, 7)
-            a.buckets = nil
             local b = Ledger.NewSession(5000, 7)
-            b.buckets = { active = 10, idle = 0, travel = 0, dead = 0 }
+            Ledger.AppendRecord(b, Ledger.SERIES.state, Ledger.PackStateFlags({ combat = true }))
 
             local entry = Ledger.CloseLevel({ a, b }, 10)
 
-            assert.are.same({ active = 10, idle = 0, travel = 0, dead = 0 }, entry.buckets)
+            assert.are.same({ 1 }, entry.stateSeries)
+            assert.are.equal(1, entry.buckets.active)
+        end)
+    end)
+
+    describe("RecalculateAllBuckets", function()
+        it("recomputes entry.buckets from entry.stateSeries for every closed level", function()
+            local db = {
+                levels = {
+                    [5]  = { level = 5, stateSeries = { Ledger.PackStateFlags({ combat = true }) }, buckets = Ledger.NewEmptyBuckets() },
+                    [6]  = { level = 6, stateSeries = { Ledger.PackStateFlags({ dead = true }) }, buckets = Ledger.NewEmptyBuckets() },
+                },
+            }
+
+            local count = Ledger.RecalculateAllBuckets(db)
+
+            assert.are.equal(2, count)
+            assert.are.equal(1, db.levels[5].buckets.active)
+            assert.are.equal(1, db.levels[6].buckets.dead)
+        end)
+
+        it("leaves a level with no stateSeries untouched", function()
+            local db = { levels = { [5] = { level = 5, buckets = { active = 9, downtime = 0, travel = 0, dead = 0 } } } }
+
+            local count = Ledger.RecalculateAllBuckets(db)
+
+            assert.are.equal(0, count)
+            assert.are.equal(9, db.levels[5].buckets.active)
+        end)
+
+        it("an empty or missing db doesn't blow up", function()
+            assert.are.equal(0, Ledger.RecalculateAllBuckets({}))
+            assert.are.equal(0, Ledger.RecalculateAllBuckets(nil))
         end)
     end)
 

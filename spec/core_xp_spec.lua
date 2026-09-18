@@ -6,10 +6,10 @@ describe("core/xp.lua", function()
 
     before_each(function()
         Ledger = {}
-        -- MigrateDB (v2->v3, v3->v4, v4->v5) rewrites the xp series and
-        -- fills the time buckets using the generic helpers from
-        -- core/series.lua and core/time_buckets.lua: they need to be loaded
-        -- too, same as in level_close_spec.lua/events_spec.lua.
+        -- MigrateDB (v2->v3, v3->v4, v4->v5, v5->v6) rewrites the xp
+        -- series and the time-state series using the generic helpers
+        -- from core/series.lua and core/time_buckets.lua: they need to
+        -- be loaded too, same as in level_close_spec.lua/events_spec.lua.
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/time_buckets.lua"))("Ledger", Ledger)
         local chunk = assert(loadfile("Ledger/core/xp.lua"))
@@ -26,8 +26,8 @@ describe("core/xp.lua", function()
         it("a brand-new database ends up on the current version", function()
             local db = Ledger.InitDB(nil, Ledger.DEFAULTS)
 
-            assert.are.equal(5, db.version)
-            assert.are.equal(5, Ledger.DB_VERSION)
+            assert.are.equal(6, db.version)
+            assert.are.equal(6, Ledger.DB_VERSION)
         end)
 
         it("migrates a v1 database (no version) to the current one without losing its data", function()
@@ -35,7 +35,7 @@ describe("core/xp.lua", function()
 
             Ledger.InitDB(db, Ledger.DEFAULTS)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.is_true(db.shown)
         end)
     end)
@@ -44,7 +44,7 @@ describe("core/xp.lua", function()
         it("nil table: creates the full structure from scratch", function()
             local db = Ledger.InitCharDB(nil)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.are.same({}, db.levels)
             assert.are.same({}, db.sessions)
             assert.are.equal(0, db.lastKnownTotalTimePlayed)
@@ -54,21 +54,21 @@ describe("core/xp.lua", function()
         it("empty table: fills in what's missing just like if it were nil", function()
             local db = Ledger.InitCharDB({})
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.are.same({}, db.levels)
             assert.are.same({}, db.sessions)
         end)
 
         it("table already populated on the current version: doesn't alter anything already there", function()
             local original = {
-                version  = 5,
+                version  = 6,
                 levels   = { [5] = { level = 5, totalXP = 100 } },
                 sessions = { { t0 = 1000, level = 6 } },
             }
 
             local db = Ledger.InitCharDB(original)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.are.same({ [5] = { level = 5, totalXP = 100 } }, db.levels)
             assert.are.same({ { t0 = 1000, level = 6 } }, db.sessions)
         end)
@@ -76,13 +76,14 @@ describe("core/xp.lua", function()
         it("table with an old version: migrates the version and keeps/creates the rest", function()
             local db = Ledger.InitCharDB({ version = 1, sessions = { { t0 = 1, level = 3 } } })
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.are.same({}, db.levels)
-            -- The v3->v4 migration fills buckets with zero (there was no way
-            -- to know retroactively how that time was split); the
-            -- v4->v5 one adds deaths=0.
+            -- The v3->v4 migration used to fill buckets with zero; v5->v6
+            -- strips that back out (buckets are never stored on a
+            -- session anymore, only derived on demand) and starts an
+            -- empty state series instead. v4->v5 adds deaths=0.
             assert.are.same(
-                { { t0 = 1, level = 3, deaths = 0, buckets = { active = 0, idle = 0, travel = 0, dead = 0 } } },
+                { { t0 = 1, level = 3, deaths = 0, st = {} } },
                 db.sessions)
         end)
     end)
@@ -97,7 +98,7 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             -- The v4->v5 pass translates src to a numeric ID in the same run.
             assert.are.same({
                 0, 50, Ledger.SRC_IDS.kill, 0,
@@ -111,7 +112,7 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.is_nil(session.e)
         end)
 
@@ -130,35 +131,27 @@ describe("core/xp.lua", function()
         it("a database with no sessions (LedgerDB) migrates its version without blowing up", function()
             local db = Ledger.InitDB({ version = 2, shown = true }, Ledger.DEFAULTS)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.is_true(db.shown)
         end)
     end)
 
-    describe("v3 -> v4 migration: time buckets", function()
-        it("fills session.buckets with zero if it didn't exist", function()
+    describe("v3 -> v4 migration: time buckets (superseded by v6, still runs as an intermediate step)", function()
+        it("the intermediate zeroed buckets don't survive: v5->v6 strips them and starts an empty state series", function()
             local session = { t0 = 0, level = 10, e = { 0, 50, "kill", 0 } }
             local db = { version = 3, sessions = { session } }
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(5, db.version)
-            assert.are.same({ active = 0, idle = 0, travel = 0, dead = 0 }, session.buckets)
-        end)
-
-        it("doesn't touch the buckets if they already existed", function()
-            local session = { t0 = 0, level = 10, buckets = { active = 50, idle = 10, travel = 5, dead = 0 } }
-            local db = { version = 3, sessions = { session } }
-
-            Ledger.InitCharDB(db)
-
-            assert.are.same({ active = 50, idle = 10, travel = 5, dead = 0 }, session.buckets)
+            assert.are.equal(6, db.version)
+            assert.is_nil(session.buckets)
+            assert.are.same({}, session.st)
         end)
 
         it("a database with no sessions (LedgerDB) migrates without blowing up", function()
             local db = Ledger.InitDB({ version = 3, shown = true }, Ledger.DEFAULTS)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.is_true(db.shown)
         end)
     end)
@@ -214,7 +207,7 @@ describe("core/xp.lua", function()
 
             Ledger.InitCharDB(db)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
             assert.are.equal(3, db.levels[3].level)
             assert.are.equal(0, db.levels[3].deaths)
             assert.are.equal(0, db.levels[3].reached)
@@ -223,7 +216,57 @@ describe("core/xp.lua", function()
         it("a database with no sessions or levels (LedgerDB) migrates without blowing up", function()
             local db = Ledger.InitDB({ version = 4, shown = true }, Ledger.DEFAULTS)
 
-            assert.are.equal(5, db.version)
+            assert.are.equal(6, db.version)
+            assert.is_true(db.shown)
+        end)
+    end)
+
+    describe("v5 -> v6 migration: raw time-state sampling", function()
+        it("strips the old buckets field from in-progress sessions and starts an empty state series", function()
+            local session = {
+                t0 = 0, level = 10, e = {},
+                buckets = { active = 50, idle = 10, travel = 5, dead = 0 },
+            }
+            local db = { version = 5, sessions = { session } }
+
+            Ledger.InitCharDB(db)
+
+            assert.are.equal(6, db.version)
+            assert.is_nil(session.buckets)
+            assert.are.same({}, session.st)
+        end)
+
+        it("doesn't touch a session's state series if it already has samples", function()
+            local session = { t0 = 0, level = 10, e = {}, st = { 5, 5, 1 } }
+            local db = { version = 5, sessions = { session } }
+
+            Ledger.InitCharDB(db)
+
+            assert.are.same({ 5, 5, 1 }, session.st)
+        end)
+
+        it("gives already-closed levels an empty stateSeries and freshly zeroed buckets in the new shape", function()
+            local db = {
+                version = 5,
+                levels  = {
+                    [10] = {
+                        level = 10, totalXP = 500,
+                        buckets = { active = 100, idle = 20, travel = 5, dead = 0 },
+                    },
+                },
+            }
+
+            Ledger.InitCharDB(db)
+
+            assert.are.equal(6, db.version)
+            assert.are.same({}, db.levels[10].stateSeries)
+            assert.are.same({ active = 0, downtime = 0, travel = 0, dead = 0 }, db.levels[10].buckets)
+        end)
+
+        it("a database with no sessions or levels (LedgerDB) migrates without blowing up", function()
+            local db = Ledger.InitDB({ version = 5, shown = true }, Ledger.DEFAULTS)
+
+            assert.are.equal(6, db.version)
             assert.is_true(db.shown)
         end)
     end)

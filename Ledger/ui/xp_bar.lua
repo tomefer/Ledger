@@ -9,7 +9,7 @@ local ADDON_NAME, Ledger = ...
 
 -- Palette centralized in ui/palette.lua (Ledger.PALETTE), shared with
 -- the time bar and its tooltips -- see that file for the colors and
--- why active/idle have no entry of their own here.
+-- why active/downtime have no entry of their own here.
 local PALETTE = Ledger.PALETTE
 local RESTED_LIGHTEN_AMOUNT = 0.35
 

@@ -107,7 +107,6 @@ end
 ----------------------------------------------------------------------
 
 local sessions -- nil until the first PLAYER_ENTERING_WORLD
-local timeTracker
 local matcher
 local reconciler
 local previousXP
@@ -124,15 +123,6 @@ local previousLevel
 -- where it left off without depending on GetTime() surviving a client
 -- restart.
 local sessionStartRef
-
--- Inactivity clock for the time buckets (core/time_buckets.lua): the
--- instant of the last activity signal, the more recent of an xp gain
--- and entering combat (PLAYER_REGEN_DISABLED). Never
--- UnitAffectingCombat as the clock: you leave combat constantly between
--- pulls, and that doesn't mean you've stopped being "active" for the
--- inactivity threshold (Ledger.INACTIVITY_THRESHOLD, 30s).
-local lastXPGainTime
-local lastCombatEnterTime
 
 local function CurrentSession()
     if not sessions then return nil end
@@ -163,17 +153,12 @@ end
 -- the instant the current level started being tracked) from the last
 -- known total: self-correcting against lost sessions, because that
 -- total is computed by the server and is always exact. Activity buckets
--- (active/idle/travel/dead) are a separate metric -- how that time is
--- split, not how much it is -- and keep getting aggregated as-is into
--- entry.buckets via Ledger.CloseLevel.
+-- (active/downtime/travel/dead) are a separate metric -- how that time
+-- is split, not how much it is -- and get DERIVED from the level's raw
+-- per-second state samples by Ledger.CloseLevel
+-- (Ledger.ComputeBucketsFromState), never accumulated live here.
 local function CloseCurrentLevel(t)
     if not sessions or #sessions == 0 then return end
-
-    if timeTracker then
-        -- Closes the ongoing time stretch up to now, so entry.buckets
-        -- includes everything elapsed since the last sample.
-        Ledger.AddSample(timeTracker, t, timeTracker.lastState)
-    end
 
     local totalPlayed = (LedgerCharDB.lastKnownTotalTimePlayed or 0) - (LedgerCharDB.levelStartTotalPlayed or 0)
     if totalPlayed < 0 then totalPlayed = 0 end
@@ -195,9 +180,6 @@ local function CloseCurrentLevel(t)
     LedgerCharDB.levelStartTotalPlayed = LedgerCharDB.lastKnownTotalTimePlayed or 0
     SafeRequestTimePlayed()
 
-    timeTracker = Ledger.NewTracker(t, "idle")
-    timeTracker.buckets = newSession.buckets
-    Ledger.timeTracker = timeTracker
     matcher    = Ledger.NewMatcher()
     reconciler = Ledger.NewReconciler()
 
@@ -293,15 +275,6 @@ local function StartTracking(t, level)
         local lastOffset = Ledger.LastOffset(CurrentSession()) or 0
         sessionStartRef = t - (lastOffset / 10)
     end
-    timeTracker = Ledger.NewTracker(t, "idle")
-    -- Rebinds the tracker to the current session's ALREADY PERSISTED
-    -- buckets (the same table, not a copy): any future AddSample writes
-    -- directly into the session (the SavedVariable), with no separate
-    -- save step -- same as sessions/session.e. If the session is new its
-    -- buckets already start at zero (Ledger.NewSession); if it's resumed
-    -- after a /reload, it picks up where it left off.
-    timeTracker.buckets = CurrentSession().buckets
-    Ledger.timeTracker = timeTracker -- exposed for ui/time_bar.lua
     matcher     = Ledger.NewMatcher()
     reconciler  = Ledger.NewReconciler()
 end
@@ -331,20 +304,17 @@ end
 
 -- Closes the active session (tEnd) and opens a new one marked as
 -- manual. Closes, never deletes: the closed session stays in `sessions`
--- until the level closes. Also closes the pending time stretch on the
--- old session and rebinds the tracker to the new one's (zeroed)
--- buckets: each session carries its own time split, which
--- core/level_close.lua sums with the rest of the level's on close. tEnd
--- is stored as absolute time(), same as t0 (see OpenSession).
+-- until the level closes. The new session starts its own empty raw
+-- state series (Ledger.SERIES.state): each session's slice of that
+-- series gets concatenated with the rest of the level's on close
+-- (core/level_close.lua), and buckets are derived from the
+-- concatenation, never accumulated live per session. tEnd is stored as
+-- absolute time(), same as t0 (see OpenSession).
 function Ledger.ResetSession(t)
     local current = CurrentSession()
     if not current then return end
     current.tEnd = time()
-    local newSession = OpenSession(t, current.level, true)
-    if timeTracker then
-        Ledger.AddSample(timeTracker, t, timeTracker.lastState)
-        timeTracker.buckets = newSession.buckets
-    end
+    OpenSession(t, current.level, true)
 end
 
 ----------------------------------------------------------------------
@@ -366,38 +336,32 @@ end
 C_Timer.NewTicker(1, FlushMatcher)
 
 ----------------------------------------------------------------------
--- 1s ticker for the time buckets: checks whether the ongoing "active"
--- stretch needs to be closed (the inactivity clock -- time since the
--- last xp gain or the last combat entry, whichever is more recent --
--- has gone past the threshold) and redraws the time bar. AddSample is
--- only called on that real transition, never on every tick: if
--- "active" were resampled every second while still below the
--- threshold, every gap between samples would be ~1s and the retroactive
--- reclassification (core/time_buckets.lua) would never get to see a
--- long gap at once. The bar itself is redrawn every second regardless,
--- using Ledger.PreviewBuckets (without mutating the tracker) so it
--- appears to grow live even without a real transition.
+-- 1s raw state sampler: instead of deciding a bucket live, this just
+-- records the instant's raw combat/movement/dead/taxi flags (packed
+-- into a single integer, Ledger.PackStateFlags) as one more record in
+-- the current session's state series (Ledger.SERIES.state). Bucket
+-- membership is decided later, purely from this raw data
+-- (core/time_buckets.lua: Ledger.ComputeBucketsFromState), both when a
+-- level closes (core/level_close.lua) and live for the on-screen bar
+-- (ui/time_bar.lua) -- so changing a threshold and running /ldg recalc
+-- never loses anything, the raw sample is what's actually persisted.
 ----------------------------------------------------------------------
 
-local function TickTimeState()
-    if not timeTracker then return end
-    local now = GetTime()
+local function SampleTimeState()
+    local session = CurrentSession()
+    if not session then return end
 
-    local lastActivity = math.max(lastXPGainTime or 0, lastCombatEnterTime or 0)
-    if Ledger.ShouldTransitionToTravel(timeTracker, now, lastActivity) then
-        -- Straight to "travel", not "idle": the whole inactivity gap
-        -- (from the last real activity until now) counts as travel at
-        -- once, without splitting it depending on the exact instant
-        -- this ticker happens to fire.
-        Ledger.Log("trace", string.format(
-            "TimeBuckets: %.0fs without activity -- transitioning active->travel", now - lastActivity))
-        Ledger.AddSample(timeTracker, now, "travel")
-    end
-
+    local packed = Ledger.PackStateFlags({
+        combat = UnitAffectingCombat("player"),
+        moving = (GetUnitSpeed("player") or 0) > 0,
+        dead   = UnitIsDeadOrGhost("player"),
+        taxi   = UnitOnTaxi("player"),
+    })
+    Ledger.AppendRecord(session, Ledger.SERIES.state, packed)
     Ledger.RedrawTimeBar()
 end
 
-C_Timer.NewTicker(1, TickTimeState)
+C_Timer.NewTicker(1, SampleTimeState)
 
 ----------------------------------------------------------------------
 -- Events
@@ -409,9 +373,7 @@ ev:RegisterEvent("PLAYER_XP_UPDATE")
 ev:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
 ev:RegisterEvent("QUEST_TURNED_IN")
 ev:RegisterEvent("PLAYER_LEVEL_UP")
-ev:RegisterEvent("PLAYER_REGEN_DISABLED")
 ev:RegisterEvent("PLAYER_DEAD")
-ev:RegisterEvent("PLAYER_UNGHOST")
 ev:RegisterEvent("TIME_PLAYED_MSG")
 ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
     local t = GetTime()
@@ -451,14 +413,6 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
             -- delta = 0 is valid (e.g. a PLAYER_XP_UPDATE with no real
             -- change): ignored without logging it as an error.
             if result.delta ~= 0 then
-                -- Real xp gain: marks "active" right now (closes
-                -- whatever was before -- idle/travel -- and resets the
-                -- time buckets' inactivity clock).
-                lastXPGainTime = t
-                if timeTracker then
-                    Ledger.AddSample(timeTracker, t, "active")
-                end
-
                 Ledger.AccountExpectedXP(reconciler, result.delta)
                 local paired = Ledger.AddAmount(matcher, t, result.delta, Ledger.Log, result.crossing)
                 if paired then EmitEvent(paired) end
@@ -507,31 +461,14 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
             t, tostring(arg1), tostring(UnitLevel("player")), tostring(previousLevel)))
         Ledger.UpdateXP()
 
-    elseif event == "PLAYER_REGEN_DISABLED" then
-        -- Entering combat: marks "active" right away. PLAYER_REGEN_ENABLED
-        -- (leaving combat) is never used as a signal for anything --
-        -- you leave combat constantly between pulls, and that doesn't
-        -- mean you've stopped being "active" for the inactivity clock.
-        lastCombatEnterTime = t
-        if timeTracker then
-            Ledger.AddSample(timeTracker, t, "active")
-        end
-
     elseif event == "PLAYER_DEAD" then
-        if timeTracker then
-            Ledger.AddSample(timeTracker, t, "dead")
-        end
         -- Level death counter, separate from the "dead" time bucket
-        -- (how long you were dead doesn't say how many times): see
-        -- core/level_close.lua, entry.deaths.
+        -- (sampled independently every second via UnitIsDeadOrGhost,
+        -- see SampleTimeState): how long you were dead doesn't say how
+        -- many times. See core/level_close.lua, entry.deaths.
         local session = CurrentSession()
         if session then
             session.deaths = (session.deaths or 0) + 1
-        end
-
-    elseif event == "PLAYER_UNGHOST" then
-        if timeTracker then
-            Ledger.AddSample(timeTracker, t, "idle")
         end
 
     elseif event == "TIME_PLAYED_MSG" then

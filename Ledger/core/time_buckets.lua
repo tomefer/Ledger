@@ -1,101 +1,172 @@
 -- Ledger - core/time_buckets.lua
--- Accumulates elapsed time into the active, idle, travel and dead
--- buckets from timestamped state samples. Pure logic: does not use any
--- WoW API, the clock is always received as a parameter.
+-- Raw per-second state sampling (combat/moving/dead/taxi flags, packed
+-- into one integer per second -- Ledger.SERIES.state, core/series.lua)
+-- plus the pure aggregation rules that turn that raw series into the 4
+-- time buckets (active, downtime, travel, dead). Pure logic: does not
+-- use any WoW API, the samples are always received as a parameter.
 --
--- Retroactive reclassification: if the player stays "active" and
--- `threshold` seconds or more pass without a new combat sample, that
--- whole stretch is counted as "travel" instead of "active" (it wasn't
--- combat, it was travel).
+-- Split on purpose: the raw per-second sample is what actually gets
+-- persisted (session.st, concatenated across a level's sessions into
+-- entry.stateSeries on close -- core/level_close.lua), so changing a
+-- threshold below and running /ldg recalc never invalidates history --
+-- there is no live tracker object anymore, buckets are always DERIVED
+-- from the raw series, on demand, by Ledger.ComputeBucketsFromState.
 
 local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/time_buckets.lua")
 
--- Seconds without combat after which an "active" stretch starts
--- counting as "travel".
-Ledger.INACTIVITY_THRESHOLD = 30
+-- Seconds without a combat sample, while quiet, after which a stretch
+-- stops counting as a normal gap between pulls ("active") and starts
+-- counting as real downtime. UMBRAL_CORTO.
+Ledger.DOWNTIME_THRESHOLD = 15
+
+-- Consecutive raw-moving seconds (GetUnitSpeed > 0) needed before a
+-- movement run counts as travel -- filters out brief repositioning or a
+-- Sprint proc, which shouldn't register as travel.
+Ledger.SUSTAINED_MOVEMENT_SECONDS = 3
 
 -- Common shape of an empty set of buckets, to avoid repeating the
--- literal in core/events.lua (session.buckets), core/level_close.lua
--- (the levels entry's aggregate) and core/xp.lua (migration).
+-- literal in core/level_close.lua (a level entry's aggregate) and
+-- core/xp.lua (migration).
 function Ledger.NewEmptyBuckets()
-    return { active = 0, idle = 0, travel = 0, dead = 0 }
+    return { active = 0, downtime = 0, travel = 0, dead = 0 }
 end
 
--- Creates a tracker. state is the state in effect starting at t0:
--- "active", "idle", "travel" or "dead". threshold is optional (defaults
--- to Ledger.INACTIVITY_THRESHOLD).
-function Ledger.NewTracker(t0, state, threshold)
+----------------------------------------------------------------------
+-- Packing: one raw per-second sample is 4 booleans (combat, moving,
+-- dead, taxi) packed into a single integer as a sum of powers of two --
+-- Lua 5.1 has no bitwise operators, so membership is tested with
+-- arithmetic (floor division + modulo) instead of a real bitwise AND.
+----------------------------------------------------------------------
+
+local FLAG_COMBAT = 1
+local FLAG_MOVING = 2
+local FLAG_DEAD   = 4
+local FLAG_TAXI   = 8
+
+local function HasFlag(value, flag)
+    return math.floor(value / flag) % 2 == 1
+end
+
+-- flags: { combat=, moving=, dead=, taxi= } (any missing/false entry
+-- counts as unset). Returns the packed integer.
+function Ledger.PackStateFlags(flags)
+    local value = 0
+    if flags.combat then value = value + FLAG_COMBAT end
+    if flags.moving then value = value + FLAG_MOVING end
+    if flags.dead   then value = value + FLAG_DEAD   end
+    if flags.taxi   then value = value + FLAG_TAXI   end
+    return value
+end
+
+-- Inverse of PackStateFlags: { combat=, moving=, dead=, taxi= }, all
+-- real booleans (never nil).
+function Ledger.UnpackStateFlags(value)
     return {
-        buckets   = Ledger.NewEmptyBuckets(),
-        lastT     = t0,
-        lastState = state,
-        threshold = threshold or Ledger.INACTIVITY_THRESHOLD,
+        combat = HasFlag(value, FLAG_COMBAT),
+        moving = HasFlag(value, FLAG_MOVING),
+        dead   = HasFlag(value, FLAG_DEAD),
+        taxi   = HasFlag(value, FLAG_TAXI),
     }
 end
 
--- Which bucket a stretch of `elapsed` seconds that was in `state` goes
--- to: the same one, unless it was "active" and the stretch reaches the
--- threshold, in which case it's reclassified entirely as "travel"
--- (retroactive reclassification). Shared by AddSample (which does
--- mutate the tracker) and PreviewBuckets (which doesn't).
-local function ClassifyElapsed(state, elapsed, threshold)
-    if state == "active" and elapsed >= threshold then
-        return "travel"
+----------------------------------------------------------------------
+-- Aggregation rules
+----------------------------------------------------------------------
+
+-- Given a flat list of booleans (one per second, e.g. the raw "moving"
+-- flag of every sample), returns a parallel list of booleans: true for
+-- every second that belongs to a run of at least `sustainedSeconds`
+-- CONSECUTIVE true values. The whole run is marked true once it's long
+-- enough to be confirmed -- not just from the Nth second onward -- so a
+-- real travel stretch doesn't lose its first couple of seconds; a run
+-- that never reaches the threshold (repositioning, a Sprint proc) stays
+-- false throughout. A run still open at the end of the list is judged
+-- by its length so far.
+function Ledger.MarkSustainedRuns(rawFlags, sustainedSeconds)
+    local n = #rawFlags
+    local result = {}
+    for i = 1, n do result[i] = false end
+
+    local runStart = nil
+    for i = 1, n do
+        if rawFlags[i] then
+            runStart = runStart or i
+        elseif runStart then
+            if (i - runStart) >= sustainedSeconds then
+                for j = runStart, i - 1 do result[j] = true end
+            end
+            runStart = nil
+        end
     end
-    return state
+    if runStart and (n - runStart + 1) >= sustainedSeconds then
+        for j = runStart, n do result[j] = true end
+    end
+
+    return result
 end
 
--- Records that starting at instant t the state becomes `state`. Closes
--- the previous stretch [lastT, t) and adds it to the bucket it
--- belongs to, applying the retroactive reclassification if it applies.
-function Ledger.AddSample(tracker, t, state)
-    local elapsed = t - tracker.lastT
-    if elapsed > 0 then
-        local bucket = ClassifyElapsed(tracker.lastState, elapsed, tracker.threshold)
-        tracker.buckets[bucket] = tracker.buckets[bucket] + elapsed
-    end
-    tracker.lastT     = t
-    tracker.lastState = state
-end
+-- Aggregates a raw per-second state series (a flat list of packed
+-- integers, see Ledger.SERIES.state -- one record per second, index
+-- encodes the time) into the 4 buckets. thresholds is an optional
+-- table: { downtime = seconds, sustainedMovement = seconds }, each
+-- defaulting to the constants above. This is the ONLY place bucket
+-- membership is decided; calling it again on the same raw data with
+-- different thresholds (see /ldg recalc) recomputes history without
+-- losing anything.
+--
+-- Priority per second, highest first: dead always wins (even mid-fight,
+-- a corpse isn't "active"); then combat itself; then sustained movement
+-- or being on a taxi (travel); the remainder is either a short quiet
+-- gap right after combat (still "active", a normal pause between
+-- pulls) or real downtime.
+function Ledger.ComputeBucketsFromState(rawArray, thresholds)
+    thresholds = thresholds or {}
+    local downtimeThreshold  = thresholds.downtime or Ledger.DOWNTIME_THRESHOLD
+    local sustainedSeconds   = thresholds.sustainedMovement or Ledger.SUSTAINED_MOVEMENT_SECONDS
 
--- "As of now" preview of the buckets, WITHOUT mutating the tracker: a
--- copy of tracker.buckets with the open stretch [lastT, now) already
--- added to the bucket it would belong to if closed right now (same
--- retroactive reclassification as AddSample). Lets an on-screen bar
--- appear to grow every second without actually closing the stretch on
--- every redraw -- that would break the retroactive reclassification,
--- which needs to see the whole gap at once (see core/xp_capture.lua:
--- the 1s ticker only calls AddSample on real transitions, never on
--- every tick).
-function Ledger.PreviewBuckets(tracker, now)
-    local preview = {
-        active = tracker.buckets.active,
-        idle   = tracker.buckets.idle,
-        travel = tracker.buckets.travel,
-        dead   = tracker.buckets.dead,
-    }
-    local elapsed = now - tracker.lastT
-    if elapsed > 0 then
-        local bucket = ClassifyElapsed(tracker.lastState, elapsed, tracker.threshold)
-        preview[bucket] = preview[bucket] + elapsed
-    end
-    return preview
-end
+    local n = #rawArray
+    local buckets = Ledger.NewEmptyBuckets()
+    if n == 0 then return buckets end
 
--- Decides whether the ongoing "active" stretch needs to be closed
--- because the inactivity clock (time since the last real activity
--- signal: an xp gain or entering combat, whichever is more recent) has
--- gone past the tracker's threshold. Pure logic: mutates nothing,
--- doesn't touch GetTime or any WoW API -- everything is received as a
--- parameter. If true, the caller must close the stretch with
--- Ledger.AddSample(tracker, now, "travel") -- straight to travel, not
--- idle: the whole inactivity gap counts as travel until the next real
--- activity, without splitting it into two buckets depending on the
--- exact instant this ticker happens to fire (see "idle" below, which is
--- a separate state for when it's known that travel is NOT happening,
--- e.g. right after resurrecting).
-function Ledger.ShouldTransitionToTravel(tracker, now, lastActivityTime)
-    return tracker.lastState == "active" and (now - lastActivityTime) >= tracker.threshold
+    local combatFlags = {}
+    local movingRaw   = {}
+    local deadFlags   = {}
+    local taxiFlags   = {}
+    for i = 1, n do
+        local flags = Ledger.UnpackStateFlags(rawArray[i])
+        combatFlags[i] = flags.combat
+        movingRaw[i]   = flags.moving
+        deadFlags[i]   = flags.dead
+        taxiFlags[i]   = flags.taxi
+    end
+
+    local sustainedMoving = Ledger.MarkSustainedRuns(movingRaw, sustainedSeconds)
+
+    local secondsSinceCombat = nil
+    for i = 1, n do
+        local bucket
+        if deadFlags[i] then
+            bucket = "dead"
+        elseif combatFlags[i] then
+            bucket = "active"
+        elseif sustainedMoving[i] or taxiFlags[i] then
+            bucket = "travel"
+        elseif secondsSinceCombat ~= nil and secondsSinceCombat < downtimeThreshold then
+            bucket = "active"
+        else
+            bucket = "downtime"
+        end
+
+        buckets[bucket] = buckets[bucket] + 1
+
+        if combatFlags[i] then
+            secondsSinceCombat = 0
+        elseif secondsSinceCombat ~= nil then
+            secondsSinceCombat = secondsSinceCombat + 1
+        end
+    end
+
+    return buckets
 end

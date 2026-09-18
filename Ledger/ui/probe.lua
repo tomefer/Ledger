@@ -14,18 +14,26 @@ local ADDON_NAME, Ledger = ...
 -- false/omitted means called with no arguments at all -- none of the
 -- functions this probes need more than that.
 local PROBE_API_TAKES_PLAYER = {
-    UnitXP            = true,
-    UnitXPMax         = true,
-    GetXPExhaustion   = false,
-    RequestTimePlayed = false,
-    UnitOnTaxi        = true,
-    GetUnitSpeed      = true,
+    UnitXP             = true,
+    UnitXPMax          = true,
+    GetXPExhaustion    = false,
+    RequestTimePlayed  = false,
+    UnitOnTaxi         = true,
+    GetUnitSpeed       = true,
+    UnitAffectingCombat = true,
+    UnitIsDeadOrGhost  = true,
 }
 
 -- Fixed order (never derived from pairs(), which has no stable order
 -- in Lua), so /ldg probe's output is deterministic run to run.
+-- UnitOnTaxi/GetUnitSpeed/UnitAffectingCombat/UnitIsDeadOrGhost feed the
+-- real per-second time-state sampler now (ui/xp_capture.lua:
+-- SampleTimeState, see core/time_buckets.lua), not just a
+-- forward-looking curiosity -- worth checking here on every client this
+-- addon ships to.
 local PROBE_API_ORDER = {
-    "UnitXP", "UnitXPMax", "GetXPExhaustion", "RequestTimePlayed", "UnitOnTaxi", "GetUnitSpeed",
+    "UnitXP", "UnitXPMax", "GetXPExhaustion", "RequestTimePlayed",
+    "UnitOnTaxi", "GetUnitSpeed", "UnitAffectingCombat", "UnitIsDeadOrGhost",
 }
 
 -- Calls the global function `name` (if it exists) and captures up to
