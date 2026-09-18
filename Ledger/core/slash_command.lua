@@ -22,6 +22,7 @@ Ledger.SLASH_COMMANDS = {
     { name = "rate", desc = "shows or hides the headline xp/hour number above the xp bar; hover it for the session/level breakdown" },
     { name = "wipe", desc = "wipe confirm deletes ALL saved sessions and levels for this character (irreversible)" },
     { name = "export", desc = "shows or hides a window with the character's full data (JSON/CSV), pre-selected to copy with Ctrl+C" },
+    { name = "check", desc = "shows or hides a window reconciling recorded xp/time against the real values, with every discrepancy flagged" },
     { name = "probe", desc = "prints a compatibility snapshot of this client build: GetBuildInfo, key APIs, xp global strings, C_ChatInfo" },
 }
 

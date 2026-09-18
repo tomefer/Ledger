@@ -117,6 +117,9 @@ SlashCmdList["LEDGER"] = function(msg)
     elseif command == "export" then
         Ledger.ToggleExportFrame()
 
+    elseif command == "check" then
+        Ledger.ToggleCheckFrame()
+
     elseif command == "probe" then
         Print(Ledger.FormatProbe(Ledger.GatherProbeData()))
 

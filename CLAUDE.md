@@ -92,6 +92,9 @@ vez de suponer.
   - `/ldg export`: muestra u oculta el panel de exportación
     (`ui/export_frame.lua`), con el volcado completo de `LedgerCharDB`
     en JSON o CSV (ver "Exportación de datos" más abajo).
+  - `/ldg check`: muestra u oculta la ventana de reconciliación entre lo
+    registrado y la realidad (`ui/check_frame.lua`, ver "Reconciliación"
+    más abajo).
   - `/ldg probe`: imprime al chat un diagnóstico de compatibilidad del
     cliente actual — versión de build/interface, presencia y valor de
     un puñado de APIs, cuántos global strings `COMBATLOG_XPGAIN_*`
@@ -1119,6 +1122,70 @@ un EditBox enfocado como cualquier campo de texto nativo del sistema
 operativo); y que un volcado real por encima de
 `Ledger.EXPORT_MAX_EVENTS` no note tirón alguno al pintarse en el
 EditBox.
+
+### Reconciliación (`core/check.lua` + `ui/check_frame.lua`, `/ldg check`)
+
+Comprueba si lo que Ledger ha registrado cuadra con lo que el juego dice
+que es real, y deja cada discrepancia marcada. Mismo reparto que
+`core/state_dump.lua`: `Ledger.BuildCheck(charDB, player)` es lógica pura
+(`player = { level=, xp= }`, leídos por la UI con `UnitLevel`/`UnitXP`;
+`core/` no toca ninguna API de WoW) y devuelve `{ discrepancies=,
+lines = { { status=, text= }, ... } }`; `Ledger.FormatCheck(result)` lo
+pinta a texto plano; `ui/check_frame.lua` solo lee los valores vivos y
+muestra el texto. Tests en `spec/check_spec.lua`.
+
+- **Estados de línea**: `title` (siempre la primera: el veredicto global,
+  `ALL OK` o `N DISCREPANC(Y|IES) FOUND`), `section`, `info`, `ok`,
+  `bad` (discrepancia: la única que cuenta para el veredicto) y `skip`
+  (no verificable por falta de datos: ni cuenta como discrepancia ni se
+  da por buena en silencio). Marcas **de texto, no códigos de color**:
+  el panel es un EditBox pensado para copiar con Ctrl+C y los escapes
+  acabarían en el portapapeles. `bad` → `>>> [!!] `, `ok` → `    [OK] `,
+  `skip` → `    [??] `.
+- **Nivel actual**: xp registrada (suma de la serie de TODAS las sesiones
+  del nivel, xp cruda, nunca afectada por `includeRested`) frente a
+  `UnitXP`. `diff = registrado - real`: **positivo → doble
+  contabilización, negativo → eventos perdidos**. Con segmento gris
+  inicial (`sessions[1].initialXP > 0`) se muestra su valor y la
+  diferencia sin descontar (solo informativa: se espera que valga
+  `-initialXP`) y el veredicto usa `registrado + initial - real`. Se
+  marca también si el nivel de las sesiones no coincide con el del
+  jugador. Cualquier xp `unknown` en el desglose por origen cuenta como
+  discrepancia (evento sin fuente emparejada).
+- **Niveles cerrados, xp**: por cada `levels[n]` (orden ascendente),
+  `suma(bySource) + initialXP` frente a `entry.xpRequired`. Se usa
+  `bySource` y no `totalXP` porque este depende del `includeRested` que
+  hubiera al cerrar (no se guarda). Un nivel sin `xpRequired` (cerrado
+  antes de guardarlo) sale como `skip`.
+- **Niveles cerrados, tiempo**: `entry.totalPlayed` frente a
+  `nextReached - entry.reached`, donde `nextReached` sale de
+  `levels[n+1].reached` o, si `n+1` es el nivel en curso, de
+  `sessions[1].reached`. Solo se marca la dirección imposible: jugado
+  MAYOR que el tiempo de reloj entre dings (más `Ledger.CHECK_TIME_TOLERANCE`
+  = 60s de margen); jugado menor es normal (tiempo desconectado no
+  cuenta) y se muestra como dato. También se marca si los dings salen
+  desordenados. `reached = 0`, `n+1` sin seguimiento o sin `reached`
+  → `skip`. Sospechoso principal: la base `levelStartTotalPlayed`
+  desalineada (ver "Pendiente").
+- **Xp pendiente de emparejar** (hasta ~1s dentro del matcher) puede
+  verse como un negativo transitorio justo tras un kill o un ding: la
+  ventana lo avisa en sus notas; el botón `Refresh` la relee.
+- **Ventana**: `ui/text_window.lua: Ledger.CreateTextWindow(opts)` es la
+  fábrica compartida con `/ldg export` (frame movible/redimensionable +
+  EditBox multilínea de solo lectura en un ScrollFrame, contenido ya
+  seleccionado con `HighlightText` en cada `SetText`, Escape por
+  `UISpecialFrames` y por `OnEscapePressed`). `ui/export_frame.lua` y
+  `ui/check_frame.lua` solo añaden sus botones y su contenido.
+  `ui/debug_frame.lua` conserva su propia copia del patrón (autorefresco,
+  otro layout).
+
+**Pendiente de verificar en el juego** (nunca probado): que la ventana
+se abra, se pueda mover/redimensionar, quede el texto seleccionado y
+Escape la cierre — es exactamente el mismo mecanismo que `/ldg export`,
+que tampoco está confirmado; y que tras refactorizar `/ldg export` sobre
+la fábrica siga comportándose igual. Los niveles cerrados con esta
+versión ya llevan `xpRequired`/`initialXP`; los anteriores saldrán como
+`skip` en la comprobación de xp.
 
 ### Diagnóstico de compatibilidad (`core/probe.lua` + `ui/probe.lua`, `/ldg probe`)
 
