@@ -690,19 +690,68 @@ en memoria ha ido muestreando.
 
 - `LedgerCharDB.lastKnownTotalTimePlayed`: el último `arg1` recibido de
   `TIME_PLAYED_MSG` — se actualiza siempre que llega, sin condición.
-- `LedgerCharDB.levelStartTotalPlayed`: ese mismo total en el instante
-  en que se empezó a rastrear el nivel EN CURSO.
-- `entry.totalPlayed = lastKnownTotalTimePlayed - levelStartTotalPlayed`
+  **Es un dato guardado, nunca se usa crudo en un cálculo** (ver
+  "Estimación entre respuestas" abajo).
+- `LedgerCharDB.levelStartTotalPlayed`: el total (estimado, ver abajo)
+  en el instante en que se empezó a rastrear el nivel EN CURSO.
+- `entry.totalPlayed = EstimatePlayedTotal(t) - levelStartTotalPlayed`
   (recortado a 0 si saliera negativo, salvaguarda defensiva), calculado
-  SOLO por `Ledger.LevelPlayedTime(charDB)` (`core/played_baseline.lua`):
-  el único sitio que resta los dos totales, usado tanto por el cierre
-  de nivel como por el xp/hora en vivo del nivel.
+  SOLO por `Ledger.LevelPlayedTime(charDB, clock, now)`
+  (`core/played_baseline.lua`): el único sitio que resta la base, usado
+  tanto por el cierre de nivel como por el xp/hora en vivo del nivel.
 - `RequestTimePlayed()` se llama en `PLAYER_ENTERING_WORLD`, en
   `CloseCurrentLevel` (justo después de avanzar la base) y tras un
-  `/ldg wipe`: la respuesta (asíncrona, vía `TIME_PLAYED_MSG`) no llega a
-  tiempo para el cierre que la disparó, pero sí refina
-  `lastKnownTotalTimePlayed` para el PRÓXIMO cierre — de ahí que sea
-  "autocorregible" en vez de exacto al instante.
+  `/ldg wipe`; la respuesta (asíncrona, vía `TIME_PLAYED_MSG`) no llega
+  a tiempo para el cierre que la disparó, pero re-ancla la estimación
+  para lo que venga después.
+
+**Estimación entre respuestas** (`Ledger.EstimatePlayedTotal(charDB,
+clock, now) = cached + (now - clock.receivedAt)`): `TIME_PLAYED_MSG`
+solo contesta cuando se le pide, así que el total cacheado se congela
+entre peticiones y, leído crudo, INFRAVALORA el total por el tiempo que
+hace que llegó (un nivel cerrado 20 min después de la última respuesta
+perdía esos 20 min). `receivedAt` es el `GetTime()` de recepción; el
+tiempo jugado avanza 1s por segundo mientras el personaje está conectado
+y `GetTime()` también, así que van a la par. `now` es siempre un
+parámetro (`core/` no toca el reloj): el cierre de nivel usa `t`, el
+`GetTime()` del propio evento de xp que cruza el ding (mejor que el
+instante en que acaba emparejándose), y `rate_frame` usa `GetTime()`.
+`now` puede quedar unos segundos ANTES de `receivedAt` (un ding cuya
+respuesta llegó un instante después): vale igual, el contador es
+monótono y restar el hueco es exacto. La base del nivel siguiente
+(`AdvancePlayedBaseline`) es la estimación en el ding, no el cacheado
+crudo, así que tampoco arrastra el desfase.
+
+- **`receivedAt` NUNCA se persiste** — vive en `Ledger.playedClock`
+  (`{ receivedAt=, awaiting= }`, en memoria, creado en `ui/events.lua`
+  junto a `logState`), no en `LedgerCharDB`. Motivo (tiempo
+  desconectado): `GetTime()` está documentado como el uptime del
+  SISTEMA, con lo que su origen no es el de los datos guardados: un
+  `receivedAt` guardado en una ejecución y comparado con el `GetTime()`
+  de la siguiente sería la diferencia de dos relojes sin relación —
+  arbitraria, posiblemente negativa, y (si `GetTime()` sigue corriendo
+  con el cliente cerrado, como haría un uptime de sistema) inflada con
+  todo el tiempo desconectado, que el tiempo jugado NO cuenta. Al vivir
+  solo en memoria eso es imposible por construcción, sin depender de la
+  semántica exacta de `GetTime()`: tras un `/reload` o reinicio el
+  nuevo estado Lua no tiene `receivedAt`, así que la estimación es
+  `nil` (desconocido) hasta la respuesta al `RequestTimePlayed` que
+  `PLAYER_ENTERING_WORLD` manda enseguida (milisegundos). El único
+  tramo que cubre la estimación es uno continuo con el personaje
+  conectado, donde `GetTime()` y el tiempo jugado avanzan juntos; una
+  pantalla de carga forma parte de ese tramo, y
+  `PLAYER_ENTERING_WORLD` vuelve a pedir el total tras cada una.
+  **Pendiente de confirmar en el cliente real** la premisa de que
+  `GetTime()` no avanza con el cliente cerrado: la documentación dice lo
+  contrario (uptime del sistema); no importa para la corrección, pero
+  `/ldg probe` imprime `GetTime()` para comprobarlo (ejecutarlo, reiniciar
+  el cliente, ejecutarlo otra vez: si el valor sigue subiendo es uptime
+  de sistema; si vuelve a empezar pequeño es relativo al cliente).
+- **Desconocido → `nil`**: si el total cacheado es `nil`, o no se recibió
+  en ESTE estado Lua (un valor guardado de una ejecución anterior no
+  tiene `receivedAt` fiable, y no se usa crudo), `EstimatePlayedTotal`
+  devuelve `nil`, `LevelPlayedTime` también, y el nivel se cierra con
+  `timeUnreliable` igual que con la base desconocida (ver abajo).
 
 **`nil` significa DESCONOCIDO, nunca cero** (bug real, wipe/instalación
 nueva: el primer nivel cerrado registró 01:37:15 jugados frente a
@@ -714,11 +763,12 @@ en que empieza el rastreo — `RequestTimePlayed` es asíncrono — así que
 en `Ledger.CHAR_DEFAULTS` y valen `nil` mientras no se sepan. Las
 transiciones son lógica pura en `core/played_baseline.lua`
 (`StartPlayedBaseline`, `ApplyTimePlayed`, `LevelPlayedTime`,
-`AdvancePlayedBaseline`, `WipeCharDB`), testeada en
+`AdvancePlayedBaseline`, `WipeCharDB`, `EstimatePlayedTotal`,
+`NewPlayedClock`), testeada en
 `spec/played_baseline_spec.lua`; `ui/xp_capture.lua` solo las llama.
 
-- **`awaitingPlayedBaseline`** (local en memoria de `ui/xp_capture.lua`,
-  a propósito NO persistido): "la base es nil Y el próximo
+- **`clock.awaiting`** (en `Ledger.playedClock`, en memoria, a propósito
+  NO persistido): "la base es nil Y el próximo
   `TIME_PLAYED_MSG` es el valor correcto para sembrarla". Se activa al
   arrancar el rastreo en frío (`StartTracking` con `#sessions == 0`:
   instalación nueva) y en `/ldg wipe`, y en `CloseCurrentLevel` si al
@@ -1267,7 +1317,9 @@ o que casca al llamarla no impide ver el resto del informe.
   está corriendo sobre Classic Era o sobre WoW Forever.
 - **APIs concretas probadas** (`UnitXP`, `UnitXPMax`, `GetXPExhaustion`,
   `RequestTimePlayed`, `UnitOnTaxi`, `GetUnitSpeed`, `UnitAffectingCombat`,
-  `UnitIsDeadOrGhost`, orden fijo): cada una se marca `absent` si el
+  `UnitIsDeadOrGhost`, `GetTime`, orden fijo — esta última no alimenta
+  el muestreo de estado sino la estimación del tiempo jugado, ver
+  "`totalPlayed` de un nivel"): cada una se marca `absent` si el
   global no es una función, o si lo es, se llama con `pcall` (con
   `"player"` como único argumento las que lo necesitan) y se marca
   `present, value = ...` con cada valor devuelto (`tostring` de cada
@@ -1514,11 +1566,10 @@ falta en el `.toc`).
   vigente y DESPUÉS la avanza al total actual desde `1e8a942`, así que
   se sospecha una build desplegada anterior; `CloseCurrentLevel` ahora
   loguea a TRACE `lastKnown`/`levelStart` de cada cierre y el avance de
-  la base para poder confirmarlo. Si tras redesplegar sigue pasando, la
-  causa más probable es que `lastKnownTotalTimePlayed` esté obsoleto en
-  el instante del cierre (`RequestTimePlayed` es asíncrono, y llamarlo
-  periódicamente imprimiría "Total time played" en el chat): habría que
-  extrapolarlo con `time()` desde la última respuesta.
+  la base para poder confirmarlo. (La causa que se sospechaba como
+  alternativa, un `lastKnownTotalTimePlayed` obsoleto en el instante del
+  cierre, ya está resuelta: se extrapola con `GetTime()`, ver
+  "Estimación entre respuestas" en "`totalPlayed` de un nivel".)
 - **Verificar en el juego el arreglo de la base desconocida** (nunca
   probado con el cliente real; solo con tests): tras `/ldg wipe confirm`
   y tras una instalación nueva a mitad de nivel, que el TRACE
@@ -1526,13 +1577,12 @@ falta en el `.toc`).
   que el primer nivel cerrado tenga un `totalPlayed` cercano al tiempo
   entre dings (no al total del personaje); que un nivel que cierra antes
   de la respuesta salga con `time=unknown` en `/ldg dump` y como `[??]`
-  en `/ldg check`. **Sigue sin resolver, aparte de esto**: el
-  `lastKnownTotalTimePlayed` con el que se cierra un nivel puede estar
-  desfasado por la cantidad de tiempo transcurrida desde su última
-  respuesta (solo se refresca en `PLAYER_ENTERING_WORLD`, tras un cierre
-  o con `/played`), lo que infravalora `totalPlayed` aunque la base sea
-  buena; ese desfase, a diferencia de la base a 0, no se marca como no
-  fiable.
+  en `/ldg check`. Y la estimación por `GetTime()` (nunca probada en el
+  cliente real): que un nivel cerrado bastante después de la última
+  respuesta dé un `totalPlayed` cercano al tiempo entre dings (el TRACE
+  `LevelClose` muestra `estimated total=... [cached=..., received Ns
+  ago]`), y que con `/ldg probe` se pueda contrastar qué reloj es
+  `GetTime()` (ver "Estimación entre respuestas").
 - El sobrante de un cruce de nivel hereda el `src` del evento original
   (`EmitCrossingEvent` usa `paired.src` en las dos mitades): un sobrante
   `explore` en `off=0` del nivel nuevo solo puede venir de que el evento

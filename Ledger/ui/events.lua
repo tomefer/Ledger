@@ -31,6 +31,12 @@ end
 
 Ledger.logState = Ledger.NewLogState()
 
+-- Played-time bookkeeping that must NOT be persisted (when the cached
+-- TIME_PLAYED_MSG total was received, and whether the baseline is
+-- waiting for its first reading): see core/played_baseline.lua for why
+-- a GetTime() reading never goes into SavedVariables.
+Ledger.playedClock = Ledger.NewPlayedClock()
+
 -- Thin wrapper over Ledger.LogMessage: adds the clock (GetTime(), which
 -- core/ never touches) and, if the message passes the level filter and
 -- the chat echo is enabled, prints it. Passed as a callback into core/

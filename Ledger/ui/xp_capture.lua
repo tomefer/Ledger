@@ -140,11 +140,6 @@ local previousLevel
 -- restart.
 local sessionStartRef
 
--- true from the moment tracking (re)starts with an unknown played-time
--- baseline until the TIME_PLAYED_MSG we just asked for arrives and
--- seeds it. In memory only, on purpose: see core/played_baseline.lua.
-local awaitingPlayedBaseline = false
-
 local function CurrentSession()
     if not sessions then return nil end
     return sessions[#sessions]
@@ -173,10 +168,13 @@ end
 -- (the CHARACTER's total played time according to TIME_PLAYED_MSG, at
 -- the instant the current level started being tracked) from the last
 -- known total: self-correcting against lost sessions, because that
--- total is computed by the server and is always exact. If either of the
--- two is still unknown (nil: see core/played_baseline.lua) totalPlayed
--- is nil and the entry is flagged timeUnreliable -- never a made-up
--- number. Activity buckets
+-- total is computed by the server and is always exact. The cached total
+-- is only refreshed when TIME_PLAYED_MSG answers, so it's never read
+-- raw: Ledger.LevelPlayedTime extrapolates it to `t` (the GetTime() of
+-- the ding itself: the xp event that crosses it) with the time elapsed
+-- since it was received. If either piece is still unknown (nil: see
+-- core/played_baseline.lua) totalPlayed is nil and the entry is flagged
+-- timeUnreliable -- never a made-up number. Activity buckets
 -- (active/downtime/travel/dead) are a separate metric -- how that time
 -- is split, not how much it is -- and get DERIVED from the level's raw
 -- per-second state samples by Ledger.CloseLevel
@@ -188,15 +186,18 @@ end
 local function CloseCurrentLevel(t, xpRequired)
     if not sessions or #sessions == 0 then return end
 
-    local totalPlayed = Ledger.LevelPlayedTime(LedgerCharDB)
+    local totalPlayed = Ledger.LevelPlayedTime(LedgerCharDB, Ledger.playedClock, t)
 
     local entry = Ledger.CloseLevel(sessions, totalPlayed, LedgerDB.includeRested, nil, xpRequired)
     Ledger.RecordLevelClose(LedgerCharDB, entry)
     Ledger.Log("trace", string.format(
-        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%s (lastKnown=%s - levelStart=%s)%s, deaths=%d",
+        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%s (estimated total=%s [cached=%s, received %s ago] - levelStart=%s)%s, deaths=%d",
         entry.level, #sessions, entry.totalXP,
         totalPlayed and (totalPlayed .. "s") or "unknown",
-        tostring(LedgerCharDB.lastKnownTotalTimePlayed), tostring(LedgerCharDB.levelStartTotalPlayed),
+        tostring(Ledger.EstimatePlayedTotal(LedgerCharDB, Ledger.playedClock, t)),
+        tostring(LedgerCharDB.lastKnownTotalTimePlayed),
+        Ledger.playedClock.receivedAt and string.format("%.1fs", t - Ledger.playedClock.receivedAt) or "never",
+        tostring(LedgerCharDB.levelStartTotalPlayed),
         entry.timeUnreliable and " -- played-time baseline unknown, entry flagged timeUnreliable" or "",
         entry.deaths))
 
@@ -208,9 +209,10 @@ local function CloseCurrentLevel(t, xpRequired)
     -- Snapshot of the character's total played time for the next
     -- close, and a fresh request so it updates as soon as possible
     -- (TIME_PLAYED_MSG arrives asynchronously: see the dispatcher).
-    awaitingPlayedBaseline = Ledger.AdvancePlayedBaseline(LedgerCharDB, awaitingPlayedBaseline)
+    Ledger.AdvancePlayedBaseline(LedgerCharDB, Ledger.playedClock, t)
     Ledger.Log("trace", string.format("LevelClose: next level's levelStartTotalPlayed advanced to %s%s",
-        tostring(LedgerCharDB.levelStartTotalPlayed), awaitingPlayedBaseline and " (unknown: awaiting TIME_PLAYED_MSG)" or ""))
+        tostring(LedgerCharDB.levelStartTotalPlayed),
+        Ledger.playedClock.awaiting and " (unknown: awaiting TIME_PLAYED_MSG)" or ""))
     SafeRequestTimePlayed()
 
     matcher    = Ledger.NewMatcher()
@@ -306,7 +308,7 @@ local function StartTracking(t, level)
         local session = OpenSession(t, level, false)
         session.initialXP = UnitXP("player")
         session.reached   = time()
-        awaitingPlayedBaseline = Ledger.StartPlayedBaseline(LedgerCharDB)
+        Ledger.StartPlayedBaseline(LedgerCharDB, Ledger.playedClock)
     else
         local lastOffset = Ledger.LastOffset(CurrentSession()) or 0
         sessionStartRef = t - (lastOffset / 10)
@@ -328,7 +330,7 @@ end
 -- doesn't reset the character's played time, only Ledger's records).
 -- Irreversible action: meant for /ldg wipe confirm.
 function Ledger.WipeCharacterData(t)
-    Ledger.WipeCharDB(LedgerCharDB)
+    Ledger.WipeCharDB(LedgerCharDB, Ledger.playedClock)
     sessions = nil
     StartTracking(t, UnitLevel("player"))
     previousXP    = UnitXP("player")
@@ -557,12 +559,13 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         -- used because it knows nothing about how this addon splits
         -- levels). arg1 is the baseline for totalPlayed: see
         -- CloseCurrentLevel, which subtracts
-        -- LedgerCharDB.levelStartTotalPlayed from this value. If the
-        -- baseline was waiting for its first reading (fresh install,
-        -- wipe, level just closed with no total yet), this is it.
-        local wasAwaiting = awaitingPlayedBaseline
-        awaitingPlayedBaseline = Ledger.ApplyTimePlayed(LedgerCharDB, arg1, awaitingPlayedBaseline)
-        if wasAwaiting and not awaitingPlayedBaseline then
+        -- LedgerCharDB.levelStartTotalPlayed from this value. t (this
+        -- event's GetTime()) is recorded as the moment it was received,
+        -- in memory only, so the total can be extrapolated between
+        -- replies (Ledger.EstimatePlayedTotal). If the baseline was
+        -- waiting for its first reading (fresh install, wipe, level just
+        -- closed with no total yet), this is it.
+        if Ledger.ApplyTimePlayed(LedgerCharDB, Ledger.playedClock, arg1, t) then
             Ledger.Log("trace", string.format(
                 "TIME_PLAYED_MSG t=%.3f seeded the played-time baseline: levelStartTotalPlayed=%s", t, tostring(arg1)))
         end

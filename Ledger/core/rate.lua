@@ -59,8 +59,8 @@ end
 -- levelElapsed are seconds, received as parameters since core/ never
 -- touches the clock -- levelElapsed is expected to be the character's
 -- actual played time on this level so far (Ledger.LevelPlayedTime,
--- core/played_baseline.lua: the same self-correcting source
--- core/level_close.lua's totalPlayed uses), not a sum of session
+-- core/played_baseline.lua: the same self-correcting, time-extrapolated
+-- source core/level_close.lua's totalPlayed uses), not a sum of session
 -- timestamps. It's nil when that time isn't known (baseline still
 -- unknown): the level rate is then nil too, shown as "-". includeRested is forwarded to
 -- Ledger.TotalXP/TotalXPAcrossSessions for both numbers: same toggle,

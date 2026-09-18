@@ -164,9 +164,11 @@ function Ledger.RefreshRateFrame()
 
     local session, levelSessions = CurrentSessionAndLevelSessions()
     local sessionElapsed = session and (time() - session.t0) or 0
-    -- nil while the played-time baseline is unknown: the level rate
-    -- then shows "-" instead of dividing by a made-up number.
-    local levelElapsed = Ledger.LevelPlayedTime(LedgerCharDB)
+    -- nil while the played-time baseline or total is unknown: the level
+    -- rate then shows "-" instead of dividing by a made-up number.
+    -- Extrapolated to now, so it keeps growing between TIME_PLAYED_MSG
+    -- replies instead of freezing at the last one.
+    local levelElapsed = Ledger.LevelPlayedTime(LedgerCharDB, Ledger.playedClock, GetTime())
 
     lastRates = Ledger.ComputeHeadlineRates(session, levelSessions, sessionElapsed, levelElapsed, LedgerDB.includeRested)
 
