@@ -16,11 +16,28 @@ print("Ledger: core/xp_gain_matcher.lua")
 -- merging two distinct, close-together events.
 Ledger.MAX_MATCH_GAP = 1.0
 
-function Ledger.NewMatcher(maxGap)
+-- Retention window for QUEST_TURNED_IN sources specifically, longer
+-- than MAX_MATCH_GAP. Confirmed in-game (2026-09-18): some turn-ins
+-- were seen classified as "explore" not because of a tie-break
+-- problem (SOURCE_PRIORITY already makes "quest" win a tie) but a
+-- temporal one -- the generic "You gain N experience." chat message
+-- (queued as a competing "explore" source, see
+-- core/chat_patterns.lua: Ledger.ClassifyXPGainMatch) or the delta's
+-- own PLAYER_XP_UPDATE could get paired away before QUEST_TURNED_IN's
+-- source ever arrived or was checked. Quest turn-ins are infrequent
+-- (no risk of pairing with the wrong one the way a burst of kills
+-- would), so it's safe to let a quest source wait longer -- especially
+-- now that AddAmount/AddSource match it by its exact expectedXP first
+-- (see below), which removes any ambiguity a longer window could
+-- otherwise introduce.
+Ledger.QUEST_MATCH_GAP = 3.0
+
+function Ledger.NewMatcher(maxGap, questGap)
     return {
-        maxGap  = maxGap or Ledger.MAX_MATCH_GAP,
-        amounts = {}, -- pending a source: { {t=, xp=}, ... }
-        sources = {}, -- pending an amount: { {t=, src=}, ... }
+        maxGap   = maxGap or Ledger.MAX_MATCH_GAP,
+        questGap = questGap or Ledger.QUEST_MATCH_GAP,
+        amounts  = {}, -- pending a source: { {t=, xp=}, ... }
+        sources  = {}, -- pending an amount: { {t=, src=}, ... }
     }
 end
 
@@ -58,6 +75,21 @@ local function SourceRank(item)
 end
 
 local function NoopLog() end
+
+-- Scans `list` in arrival order for the first item satisfying
+-- `predicate(item)` and removes+returns it (FIFO among ties -- e.g.
+-- two quest turn-ins awarding the same xp: the first one queued pairs
+-- with the first matching amount, not an arbitrary one). Returns nil
+-- if nothing matches. Unlike PopClosest, this never checks the time
+-- gap -- callers that need one bake it into `predicate`.
+local function PopFirstMatch(list, predicate)
+    for i, item in ipairs(list) do
+        if predicate(item) then
+            return table.remove(list, i)
+        end
+    end
+    return nil
+end
 
 -- Describes a queue's contents (amounts or sources) for logging: each
 -- item with its age relative to `now`. Never touches any WoW API; only
@@ -98,6 +130,22 @@ function Ledger.AddAmount(matcher, t, xp, log, crossing)
     log("trace", string.format("AddAmount t=%.3f xp=%d -- %s",
         t, xp, DescribeQueue(matcher.sources, t, "sources")))
 
+    -- Quantity match first, ignoring the time gap entirely: a
+    -- QUEST_TURNED_IN's expectedXP is exact, so if it matches this
+    -- delta there's no ambiguity to break by proximity, however many
+    -- milliseconds (or seconds, within questGap -- see Flush) separate
+    -- them. Only then falls through to the FIFO/temporal rule below,
+    -- which is what kills and real exploration still rely on.
+    local questSource = PopFirstMatch(matcher.sources, function(item)
+        return item.src == "quest" and item.expectedXP == xp
+    end)
+    if questSource then
+        log("trace", string.format(
+            "AddAmount: quest source expectedXP=%d matches xp=%d exactly (gap %.3fs, ignored) -> paired",
+            questSource.expectedXP, xp, t - questSource.t))
+        return { t = t, xp = xp, src = questSource.src, rested = questSource.rested, expectedXP = questSource.expectedXP, crossing = crossing }
+    end
+
     local source = PopClosest(matcher.sources, t, matcher.maxGap, SourceRank)
     if source then
         log("trace", string.format(
@@ -129,6 +177,21 @@ function Ledger.AddSource(matcher, t, src, log, rested, expectedXP)
     log("trace", string.format("AddSource t=%.3f src=%s rested=%d expectedXP=%s -- %s",
         t, src, rested, tostring(expectedXP), DescribeQueue(matcher.amounts, t, "amounts")))
 
+    -- Symmetric to AddAmount's quantity match: a quest source with a
+    -- known expectedXP pairs with a pending amount of that exact
+    -- value regardless of the time gap between them.
+    if src == "quest" and expectedXP then
+        local amount = PopFirstMatch(matcher.amounts, function(item)
+            return item.xp == expectedXP
+        end)
+        if amount then
+            log("trace", string.format(
+                "AddSource: quest expectedXP=%d matches pending amount xp=%d exactly (gap %.3fs, ignored) -> paired",
+                expectedXP, amount.xp, t - amount.t))
+            return { t = amount.t, xp = amount.xp, src = src, rested = rested, expectedXP = expectedXP, crossing = amount.crossing }
+        end
+    end
+
     local amount = PopClosest(matcher.amounts, t, matcher.maxGap)
     if amount then
         log("trace", string.format(
@@ -140,6 +203,59 @@ function Ledger.AddSource(matcher, t, src, log, rested, expectedXP)
     log("trace", "AddSource: no amount within the margin -- queuing the source")
     table.insert(matcher.sources, { t = t, src = src, rested = rested, expectedXP = expectedXP })
     return nil
+end
+
+-- Whether a pending "quest" source already explains this xp better
+-- than exploration would -- see core/chat_patterns.lua:
+-- Ledger.ClassifyXPGainMatch, which can't tell a quest turn-in and
+-- real exploration apart from the chat text alone (both produce "You
+-- gain N experience."). Called from the CHAT_MSG_COMBAT_XP_GAIN
+-- handler (ui/xp_capture.lua) before it queues a message classified
+-- "explore" as a competing source: if QUEST_TURNED_IN's own source
+-- already arrived (queued here moments earlier, or about to be), that
+-- source is what should pair with the xp, not this message.
+--
+-- `amount` is the xp figure captured from the message's own text, if
+-- any (the "explore" global string still carries a %d -- see
+-- ui/xp_capture.lua: HandleCombatXPGainMessage); nil if the message
+-- matched no variant at all. Checked in order: an exact match against
+-- a pending quest's expectedXP wins outright (reliable regardless of
+-- how the two arrived); failing that, the mere presence of ANY
+-- pending quest source still counts -- an entry with no exact-amount
+-- match might just be one whose amount we couldn't read from the
+-- message, not proof this really is exploration. Only when no quest
+-- source is pending at all does this return false. A peek, not a pop:
+-- doesn't touch the queue, the actual pairing still happens through
+-- AddAmount/AddSource so the bookkeeping stays single-sourced there.
+-- `log` is optional, same contract as the rest of this file.
+function Ledger.HasPendingQuestSource(matcher, t, amount, log)
+    log = log or NoopLog
+    log("trace", string.format("ExploreCheck t=%.3f amount=%s -- %s",
+        t, amount and tostring(amount) or "unknown", DescribeQueue(matcher.sources, t, "sources")))
+
+    local pendingQuest = false
+    for _, item in ipairs(matcher.sources) do
+        if item.src == "quest" then
+            pendingQuest = true
+            if amount and item.expectedXP == amount then
+                log("trace", string.format(
+                    "ExploreCheck: quest source expectedXP=%s matches amount exactly -- not exploration, deferring to it",
+                    tostring(item.expectedXP)))
+                return true
+            end
+            log("trace", string.format(
+                "ExploreCheck: quest source expectedXP=%s doesn't match amount=%s by value (age %.3fs) -- still pending by mere presence",
+                tostring(item.expectedXP), amount and tostring(amount) or "unknown", t - item.t))
+        end
+    end
+
+    if pendingQuest then
+        log("trace", "ExploreCheck: no exact amount match, but a quest source is still pending -- not exploration")
+        return true
+    end
+
+    log("trace", "ExploreCheck: no quest source pending -- genuine exploration")
+    return false
 end
 
 -- Discards whatever can no longer be paired because more than maxGap
@@ -168,10 +284,13 @@ function Ledger.Flush(matcher, now, log)
     for i = #matcher.sources, 1, -1 do
         local item = matcher.sources[i]
         local age = now - item.t
-        if age > matcher.maxGap then
+        -- Quest sources get their own, longer retention (questGap):
+        -- see Ledger.QUEST_MATCH_GAP above for why.
+        local retention = (item.src == "quest") and matcher.questGap or matcher.maxGap
+        if age > retention then
             log("trace", string.format(
                 "Flush: source src=%s age=%.3fs exceeds margin %.3fs -- discarded, no amount to pair with",
-                item.src, age, matcher.maxGap))
+                item.src, age, retention))
             table.remove(matcher.sources, i)
         end
     end

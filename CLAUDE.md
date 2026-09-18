@@ -512,17 +512,41 @@ nunca por orden de inserción: si el addon se instala a mitad de partida
   desambiguarlos por sí solo — así que `QUEST_TURNED_IN`
   (`questID, xp, dinero`) se encola como fuente propia
   (`Ledger.AddSource(matcher, t, "quest", log, 0, xp)`), igual que
-  cualquier mensaje de combate, en vez de solo loguearse. Cuando varias
-  fuentes caen dentro del margen a la vez, `core/xp_gain_matcher.lua:
-  SOURCE_PRIORITY` hace que `"quest"` gane siempre a cualquier otra
-  (`PopClosest` desempata primero por prioridad y solo luego por
-  cercanía temporal); `"explore"` solo se usa cuando no hay ningún
-  `QUEST_TURNED_IN` en la ventana. El `xp` otorgado por la quest (arg2)
-  viaja como `expectedXP` en el evento emparejado, para verificación
-  cruzada: `ui/xp_capture.lua: EmitEvent` compara `expectedXP` contra el
-  `xp` real (siempre el delta de `UnitXP`, nunca el de la quest) y
-  loguea a ERROR si no coinciden — la cantidad grabada sigue siendo
-  siempre la del delta, la discrepancia es solo una señal de alarma.
+  cualquier mensaje de combate, en vez de solo loguearse. El `xp`
+  otorgado por la quest (arg2) viaja como `expectedXP` en el evento
+  emparejado, para verificación cruzada: `ui/xp_capture.lua: EmitEvent`
+  compara `expectedXP` contra el `xp` real (siempre el delta de
+  `UnitXP`, nunca el de la quest) y loguea a ERROR si no coinciden — la
+  cantidad grabada sigue siendo siempre la del delta, la discrepancia
+  es solo una señal de alarma.
+  - **Emparejamiento por cantidad, no por tiempo (confirmado en el
+    juego 2026-09-18: algunas entregas se clasificaban como "explore",
+    no todas)**: el desempate por prioridad
+    (`core/xp_gain_matcher.lua: SOURCE_PRIORITY`, `"quest"` siempre
+    gana a cualquier otra dentro del margen) nunca fue el problema —
+    el problema era de ventana temporal: el mensaje genérico de
+    combate y el propio `QUEST_TURNED_IN` no siempre llegan a tiempo
+    de coincidir DENTRO del margen a la vez, así que uno de los dos
+    podía emparejarse (o quedar huérfano) antes de que el otro
+    llegara a competir. `Ledger.AddAmount`/`Ledger.AddSource` ahora
+    buscan primero, antes que la regla FIFO por proximidad, una
+    etiqueta `"quest"` pendiente cuyo `expectedXP` coincida EXACTO con
+    la cantidad — si la hay, gana sin importar los milisegundos de
+    separación (una entrega de quest es infrecuente, no hay riesgo de
+    emparejar con la equivocada, a diferencia de los kills, que sí
+    llegan en ráfaga y siguen usando solo la ventana normal). Las
+    etiquetas `"quest"` además sobreviven más en la cola
+    (`Ledger.QUEST_MATCH_GAP = 3.0`, frente a `Ledger.MAX_MATCH_GAP =
+    1.0` para todo lo demás — `matcher.questGap`, usado solo en el
+    `Flush` de fuentes) para dar tiempo a que llegue la cantidad. Y un
+    mensaje genérico solo se clasifica de verdad como `"explore"` si
+    `core/xp_gain_matcher.lua: Ledger.HasPendingQuestSource` (llamada
+    desde `ui/xp_capture.lua` antes de encolarlo) no encuentra ninguna
+    etiqueta `"quest"` pendiente en la cola — ni por cantidad (usando
+    el propio `%d` que ese mensaje captura) ni por sola presencia; si
+    la encuentra, el mensaje se descarta sin encolarse como fuente
+    competidora, porque ya sabemos que la fuente real de esa xp es la
+    quest. Todo TRACE (`ExploreCheck: ...`).
 - **Instrumentación de diagnóstico (ver más abajo, "Sistema de log")**:
   todo el flujo anterior (eventos crudos, intentos de casado con sus
   capturas, bono por descanso detectado, estado de la cola de
@@ -1316,6 +1340,12 @@ falta en el `.toc`).
   del bug `src = "unknown"` (ver "Sistema de log" arriba) funciona con
   el resto de variantes reales de este cliente, no solo con el caso del
   bono por descanso ya reproducido en tests.
+- Confirmar en el juego el emparejamiento de `QUEST_TURNED_IN` por
+  cantidad exacta (ver "Captura de eventos", "QUEST_TURNED_IN y
+  prioridad sobre explore" arriba, corregido 2026-09-18, solo probado
+  con tests): que las entregas de quest ya no se clasifiquen como
+  "explore" en ningún caso real, revisando el TRACE `ExploreCheck:` de
+  varias entregas seguidas y alguna con un kill simultáneo de verdad.
 - Nada lee todavía `Ledger.ReconciliationGap(reconciler)` para avisar en
   caliente si se dispara — hoy solo existe el contador en memoria
   (`ui/xp_capture.lua`). Falta decidir dónde mostrarlo: ¿un aviso

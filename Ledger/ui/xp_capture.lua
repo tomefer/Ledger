@@ -61,7 +61,17 @@ Ledger.restedStrings = restedStrings
 -- pure logic) and logs every variant tried at TRACE level (matched or
 -- not, and what it captured if it matched), plus the resulting final
 -- category. Also extracts the rested bonus if the message carries the
--- suffix (Ledger.ExtractRestedBonus, also pure). Returns category, rested.
+-- suffix (Ledger.ExtractRestedBonus, also pure).
+--
+-- Returns category, rested, capturedAmount. capturedAmount is the xp
+-- figure the matched variant itself captured (nil if nothing matched,
+-- or the matched variant has no %d) -- for a "kill" variant
+-- ("%s dies, you gain %d experience.") that's the LAST captured group,
+-- since %d follows %s in the text; for "explore"
+-- ("You gain %d experience.", no %s) it's the only one. Fed to
+-- Ledger.HasPendingQuestSource by the caller so a category="explore"
+-- message can be checked against a pending QUEST_TURNED_IN by exact
+-- amount, not just by presence.
 local function HandleCombatXPGainMessage(msg, t)
     local category, attempts = Ledger.ClassifyXPGainMatch(xpGainStrings, msg)
 
@@ -89,7 +99,13 @@ local function HandleCombatXPGainMessage(msg, t)
             "CHAT_MSG_COMBAT_XP_GAIN t=%.3f rested bonus detected: rested=%d", t, rested))
     end
 
-    return category, rested
+    local capturedAmount
+    local lastAttempt = attempts[#attempts]
+    if lastAttempt and lastAttempt.matched then
+        capturedAmount = tonumber(lastAttempt.captured[#lastAttempt.captured])
+    end
+
+    return category, rested, capturedAmount
 end
 
 ----------------------------------------------------------------------
@@ -452,9 +468,22 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
 
     elseif event == "CHAT_MSG_COMBAT_XP_GAIN" then
         Ledger.Log("trace", string.format("CHAT_MSG_COMBAT_XP_GAIN t=%.3f msg=<<%s>>", t, tostring(arg1)))
-        local category, rested = HandleCombatXPGainMessage(arg1, t)
-        local paired = Ledger.AddSource(matcher, t, category, Ledger.Log, rested)
-        if paired then EmitEvent(paired) end
+        local category, rested, capturedAmount = HandleCombatXPGainMessage(arg1, t)
+
+        -- A generic "You gain N experience." is identical to a quest
+        -- turn-in's own message (core/chat_patterns.lua can't tell them
+        -- apart from the text alone) -- if QUEST_TURNED_IN's source is
+        -- already pending (or about to be, see Ledger.QUEST_MATCH_GAP),
+        -- that's what should pair with this xp, not a competing
+        -- "explore" source queued here. See core/xp_gain_matcher.lua:
+        -- Ledger.HasPendingQuestSource.
+        if category == "explore" and Ledger.HasPendingQuestSource(matcher, t, capturedAmount, Ledger.Log) then
+            Ledger.Log("trace", string.format(
+                "CHAT_MSG_COMBAT_XP_GAIN t=%.3f suppressed as explore -- a quest source explains this xp instead", t))
+        else
+            local paired = Ledger.AddSource(matcher, t, category, Ledger.Log, rested)
+            if paired then EmitEvent(paired) end
+        end
 
     elseif event == "QUEST_TURNED_IN" then
         -- arg1 = questID, arg2 = xp awarded, arg3 = money awarded.

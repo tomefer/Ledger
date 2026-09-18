@@ -214,4 +214,96 @@ describe("core/xp_gain_matcher.lua", function()
             assert.are.equal("explore", m.sources[1].src)
         end)
     end)
+
+    describe("quest matched by exact expectedXP, not by proximity (in-game fix, 2026-09-18)", function()
+        it("pairs a quest by exact amount even with a gap well past MAX_MATCH_GAP", function()
+            local m = Ledger.NewMatcher(1) -- maxGap=1, questGap defaults to 3
+            Ledger.AddSource(m, 10.0, "quest", nil, 0, 80)
+
+            -- 2.5s gap: past maxGap (1s), still within questGap (3s),
+            -- and an exact expectedXP match, which ignores the gap
+            -- entirely -- would NOT have paired under the old
+            -- proximity-only rule.
+            local paired = Ledger.AddAmount(m, 12.5, 80)
+
+            assert.are.same({ t = 12.5, xp = 80, src = "quest", rested = 0, expectedXP = 80 }, paired)
+        end)
+
+        it("also matches by exact amount in the other arrival order (amount queued first)", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddAmount(m, 10.0, 80)
+
+            local paired = Ledger.AddSource(m, 12.5, "quest", nil, 0, 80)
+
+            assert.are.same({ t = 10.0, xp = 80, src = "quest", rested = 0, expectedXP = 80 }, paired)
+        end)
+
+        it("quest and kill pending at once: the amount matching the quest's value pairs with it, not the closer kill", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddSource(m, 10.0, "quest", nil, 0, 80)
+            Ledger.AddSource(m, 10.04, "kill") -- closer in time than the quest
+
+            local paired = Ledger.AddAmount(m, 10.05, 80)
+
+            assert.are.equal("quest", paired.src)
+            assert.are.equal(80, paired.expectedXP)
+            -- The kill source is untouched, still pending.
+            assert.are.equal(1, #m.sources)
+            assert.are.equal("kill", m.sources[1].src)
+        end)
+
+        it("two quest turn-ins in a row pair FIFO, even with the same expectedXP", function()
+            local m = Ledger.NewMatcher(1)
+            -- rested is 0 on a real quest source; here it's abused as a
+            -- marker to tell which queued source actually paired.
+            Ledger.AddSource(m, 10.0, "quest", nil, 1, 50)
+            Ledger.AddSource(m, 10.2, "quest", nil, 2, 50)
+
+            local paired1 = Ledger.AddAmount(m, 10.5, 50)
+            local paired2 = Ledger.AddAmount(m, 10.9, 50)
+
+            assert.are.equal(1, paired1.rested)
+            assert.are.equal(2, paired2.rested)
+        end)
+
+        it("Flush keeps a pending quest source past maxGap but discards it past questGap", function()
+            local m = Ledger.NewMatcher(1, 3)
+            Ledger.AddSource(m, 100.0, "quest", nil, 0, 80)
+
+            -- Past maxGap (1s) but within questGap (3s): still pending.
+            assert.are.same({}, Ledger.Flush(m, 102.0))
+            assert.is_nil(Ledger.AddAmount(m, 102.0, 999)) -- unrelated amount, doesn't consume it
+            assert.are.equal(1, #m.sources)
+
+            -- Past questGap: discarded like any other orphaned source.
+            Ledger.Flush(m, 103.5)
+            assert.are.equal(0, #m.sources)
+        end)
+    end)
+
+    describe("HasPendingQuestSource", function()
+        it("real exploration: no quest source pending at all", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddSource(m, 10.0, "kill")
+
+            assert.is_false(Ledger.HasPendingQuestSource(m, 10.05, 45))
+        end)
+
+        it("a pending quest whose expectedXP matches the message's captured amount wins", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddSource(m, 10.0, "quest", nil, 0, 45)
+
+            assert.is_true(Ledger.HasPendingQuestSource(m, 12.5, 45))
+            -- It's a peek, not a pop.
+            assert.are.equal(1, #m.sources)
+        end)
+
+        it("a pending quest still wins by mere presence when the amount doesn't match or is unknown", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddSource(m, 10.0, "quest", nil, 0, 999)
+
+            assert.is_true(Ledger.HasPendingQuestSource(m, 10.05, 45))
+            assert.is_true(Ledger.HasPendingQuestSource(m, 10.05, nil))
+        end)
+    end)
 end)
