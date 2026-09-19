@@ -190,6 +190,19 @@ local function CloseCurrentLevel(t, xpRequired)
 
     local entry = Ledger.CloseLevel(sessions, totalPlayed, LedgerDB.includeRested, nil, xpRequired)
     Ledger.RecordLevelClose(LedgerCharDB, entry)
+
+    -- Cross-check the played time just recorded against two independent
+    -- measurements (core/level_time.lua): never more than the time
+    -- since this level's ding, never less than what the per-second
+    -- sampler measured in game, and coherent with the xp curve's length.
+    -- The entry is kept as computed -- a violation is reported, not
+    -- silently "fixed" -- and /ldg check will show it again afterward.
+    local sinceDing = (entry.reached or 0) > 0 and (time() - entry.reached) or nil
+    for _, violation in ipairs(Ledger.LevelTimeViolations(entry, sinceDing)) do
+        Ledger.Log("error", string.format(
+            "LevelClose invariant violated (level %d, %s): %s", entry.level, violation.id, violation.text))
+    end
+
     Ledger.Log("trace", string.format(
         "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%s (estimated total=%s [cached=%s, received %s ago] - levelStart=%s)%s, deaths=%d",
         entry.level, #sessions, entry.totalXP,

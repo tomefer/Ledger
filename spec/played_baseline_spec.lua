@@ -298,6 +298,148 @@ describe("core/played_baseline.lua", function()
         end)
     end)
 
+    describe("replay of a real export (Astuto-Enculador, levels 8 and 9)", function()
+        -- The file said: level 8 totalPlayed=10405 (real 530s), level 9
+        -- totalPlayed=531 (real 2552s), levelStartTotalPlayed=10936,
+        -- lastKnownTotalTimePlayed=13488. The only replies were the one at
+        -- login/wipe and one after each close, so those are all replayed.
+        --
+        -- Times are GetTime() seconds from W (tracking start); the
+        -- character's true total at time t is 10405 + t.
+        local W, D9, D10 = 0, 530, 530 + 2552
+        local function TrueTotal(t) return 10405 + t end
+
+        -- What 0.7.0 did (git 7187423): at each close, totalPlayed =
+        -- lastKnown - base and then base := lastKnown, i.e. the cached
+        -- total captured BEFORE the reply requested at that close lands.
+        local function Legacy()
+            local lastKnown, base, out = TrueTotal(W), 0, {}
+            for _, closeAt in ipairs({ D9, D10 }) do
+                out[#out + 1] = lastKnown - base
+                base = lastKnown
+                lastKnown = TrueTotal(closeAt + 0.5) -- the reply arrives just after
+            end
+            return out, base, lastKnown
+        end
+
+        it("the old algorithm reproduces the file exactly (this is the root cause)", function()
+            local played, base, lastKnown = Legacy()
+
+            assert.are.same({ 10405, 530.5 }, played) -- file: 10405 and 531
+            assert.are.equal(10935.5, base)           -- file: 10936
+            assert.are.equal(13487.5, lastKnown)      -- file: 13488
+            -- ...and the sum of the recorded totalPlayed IS the baseline, an identity of
+            -- "base := lastKnown", not a separate bug:
+            assert.are.equal(base, played[1] + played[2])
+        end)
+
+        it("the current algorithm gives each level ITS duration from the very same replies", function()
+            local charDB = Ledger.InitCharDB(nil)
+            local clock = Ledger.NewPlayedClock()
+            Ledger.WipeCharDB(charDB, clock)
+            Ledger.ApplyTimePlayed(charDB, clock, TrueTotal(W), W) -- login/wipe reply seeds the baseline
+
+            local entry8 = CloseLevelLikeTheUI(charDB, clock, 8, D9)
+            Ledger.ApplyTimePlayed(charDB, clock, TrueTotal(D9 + 0.5), D9 + 0.5) -- reply after the close
+            local entry9 = CloseLevelLikeTheUI(charDB, clock, 9, D10)
+
+            assert.are.equal(530, entry8.totalPlayed)               -- was 10405
+            assert.is_true(math.abs(entry9.totalPlayed - 2552) <= 1) -- was 531
+            assert.is_nil(entry8.timeUnreliable)
+            assert.is_nil(entry9.timeUnreliable)
+        end)
+
+        it("the baseline after a close is the ABSOLUTE total at the ding, never base + totalPlayed", function()
+            local charDB = Ledger.InitCharDB(nil)
+            local clock = Ledger.NewPlayedClock()
+            Ledger.WipeCharDB(charDB, clock)
+            Ledger.ApplyTimePlayed(charDB, clock, TrueTotal(W), W)
+
+            CloseLevelLikeTheUI(charDB, clock, 8, D9)
+
+            assert.are.equal(TrueTotal(D9), charDB.levelStartTotalPlayed)
+        end)
+
+        it("the level in progress counts from ITS ding, not from the previous level's (was 2552 for level 10)", function()
+            local charDB = Ledger.InitCharDB(nil)
+            local clock = Ledger.NewPlayedClock()
+            Ledger.WipeCharDB(charDB, clock)
+            Ledger.ApplyTimePlayed(charDB, clock, TrueTotal(W), W)
+            CloseLevelLikeTheUI(charDB, clock, 8, D9)
+            Ledger.ApplyTimePlayed(charDB, clock, TrueTotal(D9 + 0.5), D9 + 0.5)
+            CloseLevelLikeTheUI(charDB, clock, 9, D10)
+            Ledger.ApplyTimePlayed(charDB, clock, TrueTotal(D10 + 0.5), D10 + 0.5)
+
+            -- 871s into level 10
+            local inProgress = Ledger.LevelPlayedTime(charDB, clock, D10 + 871)
+
+            assert.is_true(math.abs(inProgress - 871) <= 1)
+        end)
+
+        it("passes the close invariants that the old numbers broke", function()
+            assert(loadfile("Ledger/core/time_bar.lua"))("Ledger", Ledger)
+            assert(loadfile("Ledger/core/level_time.lua"))("Ledger", Ledger)
+            local charDB = Ledger.InitCharDB(nil)
+            local clock = Ledger.NewPlayedClock()
+            Ledger.WipeCharDB(charDB, clock)
+            Ledger.ApplyTimePlayed(charDB, clock, TrueTotal(W), W)
+
+            local entry8 = CloseLevelLikeTheUI(charDB, clock, 8, D9)
+            entry8.buckets = { active = 110, downtime = 136, travel = 280, dead = 0 } -- from the file: 526
+            entry8.curve = { 0, 50, 31, 114, 67, 35, 0, 1035, 192 }
+
+            assert.are.same({}, Ledger.LevelTimeViolations(entry8, D9 - W))
+            -- and the old value trips them:
+            entry8.totalPlayed = 10405
+            assert.are.equal("exceeds-elapsed", Ledger.LevelTimeViolations(entry8, D9 - W)[1].id)
+        end)
+    end)
+
+    describe("a wrong close does not poison the levels after it (self-correcting)", function()
+        it("the next level is right even if this one's baseline was off by 5000s", function()
+            local charDB, clock = ReplyAt(20000, 100, 15000) -- baseline 5000s too low
+            local wrong = CloseLevelLikeTheUI(charDB, clock, 6, 100)
+            assert.are.equal(5000, wrong.totalPlayed)         -- wrong, as constructed
+
+            -- a fresh reply and 600s of the next level
+            Ledger.ApplyTimePlayed(charDB, clock, 20300, 400)
+            local right = CloseLevelLikeTheUI(charDB, clock, 7, 700)
+
+            assert.are.equal(600, right.totalPlayed)
+        end)
+    end)
+
+    describe("/reload and PLAYER_ENTERING_WORLD never rewrite the level's baseline", function()
+        it("a reload mid-level keeps the baseline and the level keeps counting from its ding", function()
+            -- Before the reload: baseline set at the ding, 1000s of the level played.
+            local charDB, clock = ReplyAt(10000, 0, 10000)
+            assert.are.equal(1000, Ledger.LevelPlayedTime(charDB, clock, 1000))
+
+            -- /reload: same charDB (persisted), a brand-new Lua state -> fresh clock.
+            local reloaded = Ledger.NewPlayedClock()
+            assert.is_nil(Ledger.LevelPlayedTime(charDB, reloaded, 1005)) -- unknown until the reply, not a wrong number
+
+            -- PLAYER_ENTERING_WORLD's reply lands (5s later).
+            Ledger.ApplyTimePlayed(charDB, reloaded, 11005, 1010)
+
+            assert.are.equal(10000, charDB.levelStartTotalPlayed)      -- untouched
+            assert.are.equal(1005, Ledger.LevelPlayedTime(charDB, reloaded, 1010))
+            local entry = CloseLevelLikeTheUI(charDB, reloaded, 6, 1500)
+            assert.are.equal(1495, entry.totalPlayed)                   -- the WHOLE level, not just since the reload
+        end)
+
+        it("every replies-only event (zone loads) leaves the baseline alone", function()
+            local charDB, clock = ReplyAt(10000, 0, 10000)
+
+            for i = 1, 5 do
+                Ledger.ApplyTimePlayed(charDB, clock, 10000 + i * 200, i * 200) -- PLAYER_ENTERING_WORLD replies
+            end
+
+            assert.are.equal(10000, charDB.levelStartTotalPlayed)
+            assert.are.equal(1000, Ledger.LevelPlayedTime(charDB, clock, 1000))
+        end)
+    end)
+
     describe("migration v7 -> v8", function()
         it("turns a bogus 0 baseline on a level past 1 back into unknown", function()
             local db = { version = 7, lastKnownTotalTimePlayed = 5835, levelStartTotalPlayed = 0,
@@ -320,15 +462,34 @@ describe("core/played_baseline.lua", function()
 
         it("turns a lastKnown of 0 (never received) into unknown, and leaves real values alone", function()
             local a = { version = 7, lastKnownTotalTimePlayed = 0, levelStartTotalPlayed = 0 }
-            local b = { version = 7, lastKnownTotalTimePlayed = 5835, levelStartTotalPlayed = 4859,
-                        sessions = { { level = 6, stateSeries = {} } } }
+            local b = { version = 7, lastKnownTotalTimePlayed = 5835, sessions = { { level = 6, stateSeries = {} } } }
 
             Ledger.InitCharDB(a)
             Ledger.InitCharDB(b)
 
             assert.is_nil(a.lastKnownTotalTimePlayed)
             assert.are.equal(5835, b.lastKnownTotalTimePlayed)
-            assert.are.equal(4859, b.levelStartTotalPlayed)
+        end)
+
+        it("drops a NON-zero baseline written by an old build: it sat one reply behind (real export)", function()
+            -- Astuto-Enculador at level 10: baseline 10936 was really the total
+            -- at the ding into level 9; the level in progress began at 13488.
+            local db = { version = 7, lastKnownTotalTimePlayed = 13488, levelStartTotalPlayed = 10936,
+                         sessions = { { level = 10, stateSeries = {} } } }
+
+            Ledger.InitCharDB(db)
+
+            assert.is_nil(db.levelStartTotalPlayed)
+            assert.are.equal(13488, db.lastKnownTotalTimePlayed)
+        end)
+
+        it("does not touch the baseline of data already on v8 (written by the fixed algorithm)", function()
+            local db = { version = 8, lastKnownTotalTimePlayed = 13488, levelStartTotalPlayed = 13400,
+                         sessions = { { level = 10, stateSeries = {} } } }
+
+            Ledger.InitCharDB(db)
+
+            assert.are.equal(13400, db.levelStartTotalPlayed)
         end)
     end)
 end)

@@ -16,14 +16,6 @@ local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/check.lua")
 
--- A level's total played time can't exceed the wall-clock time between
--- its ding and the next one (played time only stops counting while
--- logged out, it never runs ahead of the clock). This is the slack, in
--- seconds, allowed on that comparison: `reached` is stamped with time()
--- at the ding and totalPlayed comes from the server's own counter, so
--- the two are never exactly aligned.
-Ledger.CHECK_TIME_TOLERANCE = 60
-
 -- status -> prefix of each rendered line. Only "bad" lines count as
 -- discrepancies; ">>>" makes them stand out at a glance in a wall of
 -- monospace text.
@@ -229,9 +221,11 @@ function Ledger.BuildCheck(charDB, player)
 
     ------------------------------------------------------------------
     -- Time: each closed level's totalPlayed (the server's own counter)
-    -- against the wall-clock time between its ding and the next one.
-    -- Played can be LESS than elapsed (logged-out time doesn't count);
-    -- it can never be MORE, so that's the only direction flagged.
+    -- against the invariants in core/level_time.lua: never more than the
+    -- wall-clock time between its ding and the next one, never less than
+    -- what the per-second sampler measured in game, and coherent with
+    -- the xp curve's length. Played can be LESS than the time between
+    -- dings (logged-out time doesn't count), that alone is fine.
     ------------------------------------------------------------------
     add("section", "Closed levels: played time vs time between dings")
     if #closed == 0 then
@@ -250,25 +244,37 @@ function Ledger.BuildCheck(charDB, player)
             add("skip", string.format(
                 "Level %d: no reliable played-time data (the baseline was unknown when it closed) -- not an addon error",
                 level))
-        elseif reached <= 0 or not nextReached then
-            add("skip", string.format(
-                "Level %d: cannot verify -- the ding time of level %d or %d is not known", level, level, level + 1))
         else
-            local elapsed = nextReached - reached
-            local played  = entry.totalPlayed
-            if elapsed < 0 then
+            -- Time between the two dings, when both are known and in
+            -- order; the checks that don't need it (samples, curve) run
+            -- either way.
+            local elapsed
+            if reached > 0 and nextReached then
+                elapsed = nextReached - reached
+            end
+
+            local violations = Ledger.LevelTimeViolations(entry, (elapsed and elapsed >= 0) and elapsed or nil)
+            local outOfOrder = elapsed and elapsed < 0
+            if outOfOrder then
                 add("bad", string.format(
                     "Level %d: the next level's ding is %s BEFORE this one's -- ding times are out of order",
                     level, Ledger.FormatHHMMSS(-elapsed)))
-            elseif played > elapsed + Ledger.CHECK_TIME_TOLERANCE then
-                add("bad", string.format(
-                    "Level %d: played %s > %s between dings -- impossible, the played-time baseline is misaligned",
-                    level, Ledger.FormatHHMMSS(played), Ledger.FormatHHMMSS(elapsed)))
-            else
-                add("ok", string.format(
-                    "Level %d: played %s, %s between dings (%s not played: logged out or away)",
-                    level, Ledger.FormatHHMMSS(played), Ledger.FormatHHMMSS(elapsed),
-                    Ledger.FormatHHMMSS(math.max(elapsed - played, 0))))
+            end
+            for _, violation in ipairs(violations) do
+                add("bad", string.format("Level %d: %s", level, violation.text))
+            end
+
+            if #violations == 0 and not outOfOrder then
+                if elapsed then
+                    add("ok", string.format(
+                        "Level %d: played %s, %s between dings (%s of that not played: logged out)",
+                        level, Ledger.FormatHHMMSS(entry.totalPlayed), Ledger.FormatHHMMSS(elapsed),
+                        Ledger.FormatHHMMSS(math.max(elapsed - entry.totalPlayed, 0))))
+                else
+                    add("skip", string.format(
+                        "Level %d: cannot verify against the dings -- the ding time of level %d or %d is not known",
+                        level, level, level + 1))
+                end
             end
         end
     end

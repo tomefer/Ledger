@@ -799,9 +799,68 @@ transiciones son lógica pura en `core/played_baseline.lua`
   vacía + columna `timeUnreliable`; también `lastKnownTotalTimePlayed`/
   `levelStartTotalPlayed` salen `null`, nunca 0).
 - Los niveles cerrados ANTES de este arreglo conservan el `totalPlayed`
-  que tuvieran: no hay forma de distinguir a posteriori uno inflado por
-  la base a 0 (`/ldg check` lo marcará como discrepancia de tiempo si el
-  jugado excede el tiempo entre dings).
+  que tuvieran (no se destruye dato); `/ldg check` marca como
+  discrepancia los que rompen los invariantes de abajo.
+
+**Causa de fondo del `totalPlayed` erróneo en las versiones anteriores a
+0.9.0** (análisis de dos exports reales, 2026-09-19; el algoritmo viejo
+está reproducido en `spec/played_baseline_spec.lua`): al cerrar un
+nivel, `totalPlayed = lastKnown - base` y luego `base := lastKnown`, con
+`lastKnown` capturado ANTES de que llegara la respuesta de
+`RequestTimePlayed` pedida en ese mismo cierre. La base quedaba una
+respuesta por detrás, y como `lastKnown` solo se mueve cuando llega una
+respuesta (login, cierres, pantallas de carga), `totalPlayed` de un nivel
+salía como *(instante de la última respuesta antes de este cierre) menos
+(instante de la última respuesta antes del cierre anterior)*: en el caso
+típico, con respuestas solo en cada cierre, **la duración del nivel
+ANTERIOR** (un off-by-one exacto: 531 frente a los 530s del nivel previo),
+y con respuestas por pantallas de carga, un valor arbitrario en cualquiera
+de los dos sentidos. De ahí también que la suma de los `totalPlayed`
+escritos fuera EXACTAMENTE la base (`base := lastKnown` con base inicial
+0 telescopa: es una identidad, no un segundo fallo), y que el nivel en
+curso heredara el desfase. Nada en `PLAYER_ENTERING_WORLD` ni en un
+`/reload` escribe la base (los únicos escritores son
+`StartPlayedBaseline`, `WipeCharDB`, `AdvancePlayedBaseline`, la siembra
+de `ApplyTimePlayed` y la migración; y el flag `awaiting` no sobrevive a
+un `/reload`). El arreglo (0.9.0) es que la base al cerrar es el total
+ABSOLUTO estimado en el ding (`AdvancePlayedBaseline` →
+`EstimatePlayedTotal(t)`), nunca `base + totalPlayed` ni el cacheado
+crudo, así que un cierre erróneo ya no contamina los siguientes.
+
+### Invariantes del tiempo jugado (`core/level_time.lua`)
+
+Una sola definición, compartida por el cierre de nivel y por
+`/ldg check`, de qué es imposible en el `totalPlayed` de un nivel cerrado,
+contrastándolo con dos medidas independientes del contador del servidor:
+
+- **Cota superior**: nunca más que el tiempo de reloj entre el ding de
+  este nivel y el del siguiente (`reached` de cada uno; en el cierre, con
+  `time() - entry.reached`) → `exceeds-elapsed`.
+- **Cota inferior**: nunca menos que la suma de los buckets
+  (`Ledger.SumBuckets(entry.buckets)`): el ticker solo corre con el
+  cliente abierto, así que cada muestra es un segundo realmente jugado y
+  su suma es una cota inferior (se pueden perder ticks, p. ej. en una
+  pantalla de carga, pero nunca inventarse) → `below-samples`. Con datos
+  reales la suma queda 4–25s POR DEBAJO del tiempo real entre dings.
+- **Curva**: `curve` tiene una entrada por minuto de tiempo en juego, así
+  que no puede tener más de `floor((totalPlayed + tolerancia)/60) + 1`
+  entradas → `curve-too-long` (un nivel de 41 minutos con `totalPlayed` de
+  6 los rompía). Con datos reales el límite es justo (2552s → 43
+  entradas), por eso la tolerancia.
+- `Ledger.TIME_TOLERANCE = 60` s en las tres comparaciones (antes
+  `CHECK_TIME_TOLERANCE`, en `core/check.lua`).
+- Un `totalPlayed` `nil` (`timeUnreliable`) no tiene nada que comprobar.
+- **En el cierre** (`ui/xp_capture.lua: CloseCurrentLevel`): cada
+  violación se loguea a ERROR (`LevelClose invariant violated (level N,
+  id): ...`). La entrada se guarda tal cual se calculó, no se "corrige" en
+  silencio. Ojo: el nivel de log por defecto es `off`, así que ese ERROR
+  solo llega al buffer con `/ldg log error` (o más verboso) activo;
+  `/ldg check` lo vuelve a mostrar siempre.
+- **En `/ldg check`**: cada violación es una línea `[!!]` por nivel. La
+  antigua frase "not played: logged out or away" sobre un nivel que los
+  buckets desmienten era FALSA (el cliente estaba dentro del juego todo
+  ese tiempo); ahora solo sale en niveles que cumplen los invariantes, y
+  dice "logged out" (estar AFK sí cuenta como jugado).
 
 ### Barra de composición de xp (`core/xp_bar.lua` + `ui/xp_bar.lua`, `/ldg bar`)
 
@@ -1267,10 +1326,12 @@ muestra el texto. Tests en `spec/check_spec.lua`.
   `nextReached - entry.reached`, donde `nextReached` sale de
   `levels[n+1].reached` o, si `n+1` es el nivel en curso, de
   `sessions[1].reached`. Solo se marca la dirección imposible: jugado
-  MAYOR que el tiempo de reloj entre dings (más `Ledger.CHECK_TIME_TOLERANCE`
-  = 60s de margen); jugado menor es normal (tiempo desconectado no
-  cuenta) y se muestra como dato. También se marca si los dings salen
-  desordenados. `reached = 0`, `n+1` sin seguimiento o sin `reached`
+  MAYOR que el tiempo de reloj entre dings (más `Ledger.TIME_TOLERANCE`
+  = 60s de margen), MENOR que la suma de los buckets, o con una curva
+  demasiado larga (invariantes de `core/level_time.lua`, ver "Invariantes
+  del tiempo jugado"); jugado menor que el tiempo entre dings, sin más,
+  es normal (tiempo desconectado no cuenta) y se muestra como dato.
+  También se marca si los dings salen desordenados. `reached = 0`, `n+1` sin seguimiento o sin `reached`
   → `skip`. Un nivel con `timeUnreliable` (o sin `totalPlayed`) también
   → `skip`, "no reliable played-time data", explícitamente no un error
   del addon (ver "`totalPlayed` de un nivel"). Sospechoso principal de
@@ -1511,7 +1572,14 @@ arriba:
     había jugado nada); en cualquier otro nivel es el bug, y vuelve a
     nil SIN resembrarse con el próximo `TIME_PLAYED_MSG` (sería más
     tarde que el inicio real del nivel): ese nivel se cierra con
-    `timeUnreliable`. Los niveles ya cerrados no se tocan.
+    `timeUnreliable`. **Ampliado**: cualquier `levelStartTotalPlayed`
+    distinto de cero en datos v7 también vuelve a nil (excepto el 0 de un
+    personaje en nivel 1), porque toda base escrita por una versión
+    anterior a 0.8.0 iba una respuesta por detrás (ver "Causa de fondo").
+    Supuesto: ningún dato v8 procede de la 0.8.0 con base cacheada (esa
+    versión, igual que la 0.7, copiaba el `lastKnown` sin extrapolar y
+    tampoco es fiable; solo la 0.9.0 escribe bases correctas). Los
+    niveles ya cerrados no se tocan.
 - `LedgerCharDB` (por personaje, `## SavedVariablesPerCharacter`):
   `{ version, levels, sessions, lastKnownTotalTimePlayed,
   levelStartTotalPlayed }` (los dos últimos, sin default y `nil` =
@@ -1664,6 +1732,22 @@ falta en el `.toc`).
   tres valores, lo que casaba con una build anterior al muestreo crudo
   — descartar tras redesplegar), y que un nivel recién cerrado no lleve
   `stateSeries` y sí `thresholds`.
+- **Muestreo crudo, comprobado sobre exports reales (2026-09-19)**: el
+  refactor a estado crudo está completo y el bit de combate SÍ se escribe.
+  Un personaje con 51 kills en su sesión tiene `{0: 739, 1: 510, 2: 1366}`
+  muestras; otro `{0: 664, 1: 191, 2: 129}`; los buckets `active` de los
+  niveles cerrados (796s, 110s) solo pueden salir de muestras con el bit
+  de combate. Un nivel en curso con solo `{0, 2}` no es un fallo: su único
+  evento (`off=0`, `src=kill`) es el sobrante del cruce de nivel
+  (`newPart`) grabado en la sesión nueva, la pelea de ese kill ocurrió en
+  la sesión ANTERIOR, y en esos 871s no hubo combate. **Observación sin
+  explicar del todo**: en ~700 muestras de combate no aparece nunca el
+  valor 3 (combate + movimiento), cuando en la práctica se pelea
+  moviéndose; coincide con que `GetUnitSpeed` sea "secret" (y por tanto
+  `IsPlayerMoving` degrade a `false`) precisamente en combate. No afecta a
+  los buckets (en `ComputeBucketsFromState` el combate gana al
+  movimiento), pero conviene confirmarlo mirando `/ldg log show` en busca
+  del ERROR único por sesión de `GetUnitSpeed`.
 - Ver visualmente en el juego la barra de reparto de tiempo (nunca
   probada): anclaje 2px por encima de la barra de xp, el orden fijo
   active/downtime/travel/dead, los colores (incluidos los que reutilizan

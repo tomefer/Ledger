@@ -6,6 +6,7 @@ describe("core/check.lua", function()
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/events.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/time_bar.lua"))("Ledger", Ledger) -- Ledger.FormatHHMMSS
+        assert(loadfile("Ledger/core/level_time.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/check.lua"))("Ledger", Ledger)
     end)
 
@@ -287,7 +288,7 @@ describe("core/check.lua", function()
             assert.are.equal(0, result.discrepancies)
             -- level 10: 1200s between dings, 900 played -> 300 not played
             assert.is_not_nil(Find(result,
-                "Level 10: played 00:15:00, 00:20:00 between dings (00:05:00 not played", "ok"))
+                "Level 10: played 00:15:00, 00:20:00 between dings (00:05:00 of that not played: logged out)", "ok"))
             -- level 11 uses the in-progress level's session for its next ding
             assert.is_not_nil(Find(result, "Level 11: played 00:20:00, 00:20:00 between dings", "ok"))
         end)
@@ -315,6 +316,38 @@ describe("core/check.lua", function()
             assert.is_not_nil(Find(result, "Level 11: no reliable played-time data", "skip"))
         end)
 
+        it("flags a level whose played time is below what the sampler measured in game (the false 'logged out' case)", function()
+            -- Real data (export, level 6): played 373s, but the sampler had
+            -- ticked 2391s and the dings are 2405s apart -> the client was
+            -- in game the whole time, it can't have been 'logged out'.
+            local charDB = Setup(373, 1200)
+            charDB.levels[10].buckets = { active = 800, downtime = 200, travel = 1391, dead = 0 }
+            charDB.levels[10].reached, charDB.levels[11].reached = 1000, 3405
+            charDB.sessions[1].reached = 4000
+            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
+
+            assert.is_not_nil(Find(result, "Level 10: played 00:06:13 < 00:39:51 sampled in game", "bad"))
+            assert.is_nil(Find(result, "Level 10: played 00:06:13, 00:40:05 between dings"))
+        end)
+
+        it("flags an xp curve too long for the played time", function()
+            local charDB = Setup(373, 1200)
+            charDB.levels[10].curve = {}
+            for i = 1, 41 do charDB.levels[10].curve[i] = 10 end
+            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
+
+            assert.is_not_nil(Find(result, "Level 10: the xp curve spans 41 minutes but played is only 00:06:13", "bad"))
+        end)
+
+        it("still runs the sample/curve checks when the ding times are unknown", function()
+            local charDB = Setup(373, 1200)
+            charDB.levels[10].reached = 0 -- elapsed can't be computed
+            charDB.levels[10].buckets = { active = 2391 }
+            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
+
+            assert.is_not_nil(Find(result, "Level 10: played 00:06:13 < 00:39:51 sampled in game", "bad"))
+        end)
+
         it("flags played time that exceeds the time between dings", function()
             local result = Ledger.BuildCheck(Setup(1500, 1200), { level = 12, xp = 10 })
 
@@ -325,8 +358,8 @@ describe("core/check.lua", function()
         end)
 
         it("allows the tolerance before flagging", function()
-            local within = Ledger.BuildCheck(Setup(1200 + Ledger.CHECK_TIME_TOLERANCE, 1200), { level = 12, xp = 10 })
-            local beyond = Ledger.BuildCheck(Setup(1200 + Ledger.CHECK_TIME_TOLERANCE + 1, 1200), { level = 12, xp = 10 })
+            local within = Ledger.BuildCheck(Setup(1200 + Ledger.TIME_TOLERANCE, 1200), { level = 12, xp = 10 })
+            local beyond = Ledger.BuildCheck(Setup(1200 + Ledger.TIME_TOLERANCE + 1, 1200), { level = 12, xp = 10 })
 
             assert.are.equal(0, within.discrepancies)
             assert.are.equal(1, beyond.discrepancies)

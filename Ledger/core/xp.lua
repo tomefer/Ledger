@@ -243,21 +243,30 @@ function Ledger.MigrateDB(db)
         -- time as its totalPlayed:
         --   - lastKnownTotalTimePlayed = 0 can only mean "never
         --     received" (a real reading is never 0): back to nil.
-        --   - levelStartTotalPlayed = 0 is legitimate only for a
-        --     character tracked from level 1 (it really had played
-        --     nothing yet); on any other level it's the bug, so it goes
-        --     back to nil. It is NOT re-seeded from the next
-        --     TIME_PLAYED_MSG (that would be later than the level
-        --     really started): the level in progress simply closes with
-        --     no reliable time.
-        -- Levels already closed keep their totalPlayed as recorded:
-        -- there's no telling a bogus one apart afterward.
+        --   - levelStartTotalPlayed is the level in progress's baseline,
+        --     and every baseline written by a build that predates this
+        --     version is wrong: it was snapshotted from the cached total
+        --     right at the close, BEFORE the reply requested at that
+        --     close arrived, so it sits one reply behind (real exports:
+        --     a level's totalPlayed came out as the PREVIOUS level's
+        --     duration, and the sum of all recorded totalPlayed equalled
+        --     the baseline exactly). The one legitimate old value is 0 on
+        --     a character tracked from level 1 (it really had played
+        --     nothing yet); anything else goes back to nil. It is NOT
+        --     re-seeded from the next TIME_PLAYED_MSG (that would be
+        --     later than the level really started): the level in
+        --     progress simply closes with no reliable time, instead of
+        --     with a number known to be wrong.
+        -- Levels already closed keep their totalPlayed as recorded (the
+        -- data isn't destroyed): /ldg check flags the ones that break
+        -- the invariants in core/level_time.lua.
         if db.lastKnownTotalTimePlayed == 0 then
             db.lastKnownTotalTimePlayed = nil
         end
-        if db.levelStartTotalPlayed == 0 then
+        if db.levelStartTotalPlayed ~= nil then
             local first = db.sessions and db.sessions[1]
-            if not (first and first.level == 1) then
+            local legitimateZero = db.levelStartTotalPlayed == 0 and first and first.level == 1
+            if not legitimateZero then
                 db.levelStartTotalPlayed = nil
             end
         end
