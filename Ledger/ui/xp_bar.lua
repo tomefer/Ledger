@@ -300,6 +300,19 @@ local function CurrentSegments(widthPx)
     return Ledger.ComputeBarSegments(flatArray, initialXP, widthPx, maxXP)
 end
 
+-- Width the segments were last computed for. The segments are absolute
+-- pixel offsets/widths, so they're only right for that width: the
+-- frame itself is anchored to the native bar by both corners and follows
+-- it live, but the textures inside don't. If the native bar isn't laid
+-- out yet when we draw (seen after a /reload: width 0 at login), every
+-- segment comes out 0px wide and the bar is invisible until something
+-- forces a redraw -- the xp events only repaint the LAST segment, so a
+-- level's worth of earlier ones would stay wrong. Hence the
+-- OnSizeChanged hook below and the check in ExtendXPBar.
+local lastPaintedWidth
+local redrawing = false
+local WIDTH_TOLERANCE = 0.5
+
 -- Full redraw: recomputes all segments from scratch and reuses (or
 -- creates, if it needs to grow) the pool's textures. Used on level
 -- change or on login; new events within the same level use
@@ -311,8 +324,12 @@ end
 -- the native bar.
 function Ledger.RedrawXPBarFull()
     if not frame:IsShown() then return false end
+    redrawing = true
     local width = AnchorToNativeBar()
-    if not width then return false end
+    if not width then
+        redrawing = false
+        return false
+    end
 
     local segments = CurrentSegments(width)
     Ledger.Log("trace", string.format("RedrawXPBarFull: width=%dpx, %d segments", width, #segments))
@@ -321,6 +338,8 @@ function Ledger.RedrawXPBarFull()
     end
     activeCount = #segments
     ReleaseFrom(activeCount + 1)
+    lastPaintedWidth = width
+    redrawing = false
     return true, width, #segments
 end
 
@@ -335,6 +354,16 @@ function Ledger.ExtendXPBar()
     local width = frame:GetWidth()
     if not width or width <= 0 then
         Ledger.Log("trace", string.format("ExtendXPBar: frame has no width yet (%s)", tostring(width)))
+        return
+    end
+
+    -- The native bar changed size since the last full draw: every
+    -- segment is stale, not just the last one.
+    if not lastPaintedWidth or math.abs(width - lastPaintedWidth) > WIDTH_TOLERANCE then
+        Ledger.Log("trace", string.format(
+            "ExtendXPBar: width %s differs from last painted %s -- full redraw",
+            tostring(width), tostring(lastPaintedWidth)))
+        Ledger.RedrawXPBarFull()
         return
     end
 
@@ -359,6 +388,19 @@ function Ledger.ExtendXPBar()
         Ledger.RedrawXPBarFull()
     end
 end
+
+-- The native bar (and with it this frame, anchored to it) got its real
+-- size after we had already drawn: redraw for the new width. `redrawing`
+-- stops the SetSize inside AnchorToNativeBar from re-entering here.
+frame:SetScript("OnSizeChanged", function(self, width)
+    if redrawing or not self:IsShown() then return end
+    if not width or width <= 0 then return end
+    if lastPaintedWidth and math.abs(width - lastPaintedWidth) <= WIDTH_TOLERANCE then return end
+    Ledger.Log("trace", string.format(
+        "OnSizeChanged: width %s differs from last painted %s -- full redraw",
+        tostring(width), tostring(lastPaintedWidth)))
+    Ledger.RedrawXPBarFull()
+end)
 
 ----------------------------------------------------------------------
 -- /ldg bar

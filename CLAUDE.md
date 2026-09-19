@@ -744,6 +744,24 @@ horizontal que la barra nativa (`ui/xp_bar.lua: AnchorToNativeBar`).
   calculada de segmentos anteriores al último), basta con repintar el
   último segmento si se ha extendido o añadir uno nuevo, sin recrear ni
   retocar el resto — ese es el "redibujado incremental".
+- **Redibujado al cambiar el ancho** (`ui/xp_bar.lua`, 2026-09-19): los
+  segmentos son offsets/anchuras absolutas en píxeles calculadas con el
+  ancho de la barra nativa EN ESE INSTANTE; el frame sí sigue a la barra
+  nativa en vivo (anclado por las dos esquinas) pero las texturas de
+  dentro no. Si la barra nativa aún no tenía su layout final al hacer
+  login tras un `/reload` (ancho 0), todos los segmentos salían de 0px y
+  la barra era invisible hasta subir de nivel: los eventos de xp solo
+  repintan el ÚLTIMO segmento y solo `PLAYER_LOGIN`/`PLAYER_ENTERING_WORLD`/
+  `UI_SCALE_CHANGED` hacían redibujado completo (la barra de actividad no
+  lo sufría: se redibuja cada segundo). Ahora `lastPaintedWidth` guarda el
+  ancho del último pintado completo y un `OnSizeChanged` del frame, más
+  una comprobación al principio de `ExtendXPBar` como red de seguridad,
+  disparan `RedrawXPBarFull` si el ancho difiere (tolerancia 0.5px;
+  `redrawing` evita la reentrada desde el `SetSize` de
+  `AnchorToNativeBar`). Reproducido con un cliente simulado, **sin
+  confirmar en el juego**: en el log TRACE tras un `/reload`, líneas
+  `RedrawXPBarFull: width=0px` seguidas de `OnSizeChanged: ... full
+  redraw` lo confirmarían.
 - **Altura configurable**: `LedgerDB.barHeight` (`Ledger.DEFAULTS.barHeight
   = 8`), sin comando todavía para cambiarla (solo editando la
   SavedVariable a mano).
