@@ -31,11 +31,6 @@ end
 
 Ledger.logState = Ledger.NewLogState()
 
--- Played-time bookkeeping that must NOT be persisted (when the cached
--- TIME_PLAYED_MSG total was received, and whether the baseline is
--- waiting for its first reading): see core/played_baseline.lua for why
--- a GetTime() reading never goes into SavedVariables.
-Ledger.playedClock = Ledger.NewPlayedClock()
 
 -- Thin wrapper over Ledger.LogMessage: adds the clock (GetTime(), which
 -- core/ never touches) and, if the message passes the level filter and
@@ -114,7 +109,7 @@ SlashCmdList["LEDGER"] = function(msg)
 
     elseif command == "time" then
         local shown = Ledger.ToggleTimeBar()
-        Print("time-split bar: " .. (shown and "shown" or "hidden"))
+        Print("activity bar: " .. (shown and "shown" or "hidden"))
 
     elseif command == "rate" then
         local shown = Ledger.ToggleRateFrame()
@@ -160,6 +155,8 @@ end
 -- Events
 ----------------------------------------------------------------------
 
+local wipeNotice -- set on ADDON_LOADED when saved data of another version was wiped
+
 local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
@@ -172,7 +169,16 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         -- SavedVariables are already loaded by the time our own name arrives.
         if arg1 == ADDON_NAME then
             LedgerDB = Ledger.InitDB(LedgerDB, Ledger.DEFAULTS)
-            LedgerCharDB = Ledger.InitCharDB(LedgerCharDB)
+            local wiped, oldVersion
+            LedgerCharDB, wiped, oldVersion = Ledger.InitCharDB(LedgerCharDB)
+            if wiped then
+                -- No migrations: data saved under another schema version is
+                -- wiped and tracking starts clean -- never silently. Held
+                -- until PLAYER_LOGIN, when the chat is surely ready.
+                wipeNotice = string.format(
+                    "saved data was version %s, this addon uses version %d: this character's data was wiped and tracking starts clean",
+                    tostring(oldVersion), Ledger.DB_VERSION)
+            end
             self:UnregisterEvent("ADDON_LOADED")
         end
 
@@ -196,6 +202,9 @@ ev:SetScript("OnEvent", function(self, event, arg1)
             Ledger.RefreshRateFrame()
         end
         Print("loaded, version " .. GetVersion())
+        if wipeNotice then
+            Print(wipeNotice)
+        end
         self:UnregisterEvent("PLAYER_LOGIN")
 
     elseif event == "PLAYER_ENTERING_WORLD" then

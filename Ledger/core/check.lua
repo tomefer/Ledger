@@ -1,9 +1,11 @@
 -- Ledger - core/check.lua
--- Reconciliation for /ldg check: does what Ledger has RECORDED agree with
--- what the game says is REAL? Pure logic: does not use any WoW API, it
--- reads the data it's given (LedgerCharDB and the player's live
+-- Reconciliation for /ldg check: does the xp Ledger has RECORDED agree
+-- with what the game says is REAL? Pure logic: does not use any WoW API,
+-- it reads the data it's given (LedgerCharDB and the player's live
 -- level/xp, gathered by ui/check_frame.lua) -- same split as
--- core/state_dump.lua.
+-- core/state_dump.lua. Time is NOT reconciled: there are no time
+-- invariants, the activity counters are what they are (core/ticks.lua);
+-- the last /played reading is only shown as information.
 --
 -- Two steps, both pure: Ledger.BuildCheck computes the findings as a
 -- list of { status=, text= } lines (the status is what makes a line a
@@ -73,23 +75,6 @@ local function SortedLevels(levels)
     end
     table.sort(list)
     return list
-end
-
--- `reached` (absolute time()) of level+1, or nil if unknown: either it
--- was closed too and has its own entry, or it's the level in progress
--- (its first session carries the ding instant). reached = 0 means "from
--- data older than reached tracking" (see core/level_close.lua), so it's
--- as unknown as a missing one.
-local function NextReached(charDB, level)
-    local nextEntry = (charDB.levels or {})[level + 1]
-    if nextEntry and (nextEntry.reached or 0) > 0 then
-        return nextEntry.reached
-    end
-    local first = (charDB.sessions or {})[1]
-    if first and first.level == level + 1 and (first.reached or 0) > 0 then
-        return first.reached
-    end
-    return nil
 end
 
 -- charDB: the shape of LedgerCharDB ({ sessions=, levels= }).
@@ -220,63 +205,34 @@ function Ledger.BuildCheck(charDB, player)
     end
 
     ------------------------------------------------------------------
-    -- Time: each closed level's totalPlayed (the server's own counter)
-    -- against the invariants in core/level_time.lua: never more than the
-    -- wall-clock time between its ding and the next one, never less than
-    -- what the per-second sampler measured in game, and coherent with
-    -- the xp curve's length. Played can be LESS than the time between
-    -- dings (logged-out time doesn't count), that alone is fine.
+    -- Time: INFORMATION ONLY, never a discrepancy. The activity mix is
+    -- shown as percentages of the samples (never absolute time), and the
+    -- last /played reading is shown next to the sample total it was
+    -- taken against, with their difference -- a difference between the
+    -- two is expected (the sampler only ticks while the client runs) and
+    -- is presented as information, not as an error.
     ------------------------------------------------------------------
-    add("section", "Closed levels: played time vs time between dings")
-    if #closed == 0 then
-        add("info", "(no closed levels yet)")
+    add("section", "Time (information only)")
+
+    local levelTicks = charDB.levelTicks
+    add("info", "Level activity, % of samples: " .. Ledger.FormatTickSummary(levelTicks))
+    local activeSession = sessions[#sessions]
+    if activeSession then
+        add("info", "Session activity, % of samples: " .. Ledger.FormatTickSummary(activeSession.ticks))
     end
-    for _, level in ipairs(closed) do
-        local entry      = levels[level]
-        local reached    = entry.reached or 0
-        local nextReached = NextReached(charDB, level)
 
-        if entry.timeUnreliable or entry.totalPlayed == nil then
-            -- The played-time baseline was unknown when this level closed
-            -- (fresh install or wipe, see core/played_baseline.lua): no
-            -- totalPlayed was recorded. Nothing to compare, and it's not
-            -- an addon error, so it's neither OK nor a discrepancy.
-            add("skip", string.format(
-                "Level %d: no reliable played-time data (the baseline was unknown when it closed) -- not an addon error",
-                level))
-        else
-            -- Time between the two dings, when both are known and in
-            -- order; the checks that don't need it (samples, curve) run
-            -- either way.
-            local elapsed
-            if reached > 0 and nextReached then
-                elapsed = nextReached - reached
-            end
-
-            local violations = Ledger.LevelTimeViolations(entry, (elapsed and elapsed >= 0) and elapsed or nil)
-            local outOfOrder = elapsed and elapsed < 0
-            if outOfOrder then
-                add("bad", string.format(
-                    "Level %d: the next level's ding is %s BEFORE this one's -- ding times are out of order",
-                    level, Ledger.FormatHHMMSS(-elapsed)))
-            end
-            for _, violation in ipairs(violations) do
-                add("bad", string.format("Level %d: %s", level, violation.text))
-            end
-
-            if #violations == 0 and not outOfOrder then
-                if elapsed then
-                    add("ok", string.format(
-                        "Level %d: played %s, %s between dings (%s of that not played: logged out)",
-                        level, Ledger.FormatHHMMSS(entry.totalPlayed), Ledger.FormatHHMMSS(elapsed),
-                        Ledger.FormatHHMMSS(math.max(elapsed - entry.totalPlayed, 0))))
-                else
-                    add("skip", string.format(
-                        "Level %d: cannot verify against the dings -- the ding time of level %d or %d is not known",
-                        level, level, level + 1))
-                end
-            end
-        end
+    local played = charDB.played
+    if not played then
+        add("info", "/played: no reading yet (it is requested on login and when this window opens)")
+    elseif played.level ~= player.level then
+        add("info", string.format(
+            "/played: last reading is from level %s, the player is now level %d -- refresh to read again",
+            tostring(played.level), player.level))
+    else
+        add("info", string.format(
+            "/played, this level: %ds played vs %d samples at that moment, difference %+d",
+            played.seconds, played.samples, played.seconds - played.samples))
+        add("info", "  (information, not an error: samples only run while the client does)")
     end
 
     add("section", "Notes")

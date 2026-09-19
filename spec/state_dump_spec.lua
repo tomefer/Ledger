@@ -4,7 +4,7 @@ describe("core/state_dump.lua", function()
     before_each(function()
         Ledger = {}
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
-        assert(loadfile("Ledger/core/time_buckets.lua"))("Ledger", Ledger) -- Ledger.NewEmptyBuckets
+        assert(loadfile("Ledger/core/ticks.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/events.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/state_dump.lua"))("Ledger", Ledger)
     end)
@@ -59,10 +59,10 @@ describe("core/state_dump.lua", function()
     end)
 
     describe("FormatState: closed levels", function()
-        it("lists each level sorted with its xp and time", function()
+        it("lists each level sorted with its xp and activity", function()
             local levels = {
-                [12] = { level = 12, totalXP = 500, totalPlayed = 600 },
-                [7]  = { level = 7, totalXP = 200, totalPlayed = 300 },
+                [12] = { level = 12, totalXP = 500 },
+                [7]  = { level = 7, totalXP = 200 },
             }
 
             local text = Ledger.FormatState({ levels = levels })
@@ -74,28 +74,39 @@ describe("core/state_dump.lua", function()
             assert.is_true(pos7 < pos12)
         end)
 
-        it("shows a level with unknown played time as such, without erroring on the missing number", function()
+        it("shows each level's activity as percentages of its samples, never as an absolute time", function()
             local levels = {
-                [6] = { level = 6, totalXP = 500, timeUnreliable = true },
-                [7] = { level = 7, totalXP = 200, totalPlayed = 300 },
+                [7] = { level = 7, totalXP = 200,
+                        ticks = { combat = 1, nonCombat = 1, travel = 2, dead = 0, total = 4 } },
             }
 
             local text = Ledger.FormatState({ levels = levels })
 
-            assert.is_not_nil(text:find("level 6: xp=500, rested=0, time=unknown (no reliable played-time data)", 1, true))
-            assert.is_not_nil(text:find("level 7: xp=200, rested=0, time=300s", 1, true))
+            assert.is_not_nil(text:find(
+                "level 7: xp=200, rested=0, deaths=0, activity: Combat 25.0% | Non-combat 25.0% | Travel 50.0% | Dead 0.0%",
+                1, true))
+            assert.is_nil(text:find("time=", 1, true))
         end)
 
-        it("shows the thresholds a level's buckets were derived with, or unknown", function()
+        it("a level with no samples (or no counters at all) says so instead of erroring", function()
             local levels = {
-                [7]  = { level = 7, totalXP = 200, totalPlayed = 300, thresholds = { downtime = 15, sustainedMovement = 3 } },
-                [12] = { level = 12, totalXP = 500, totalPlayed = 600 },
+                [6] = { level = 6, totalXP = 500 },
+                [7] = { level = 7, totalXP = 200, ticks = { combat = 0, nonCombat = 0, travel = 0, dead = 0, total = 0 } },
             }
 
             local text = Ledger.FormatState({ levels = levels })
 
-            assert.is_not_nil(text:find("thresholds=downtime=15s/sustained=3s", 1, true))
-            assert.is_not_nil(text:find("thresholds=unknown", 1, true))
+            assert.is_not_nil(text:find("level 6: xp=500, rested=0, deaths=0, activity: no samples yet", 1, true))
+            assert.is_not_nil(text:find("level 7: xp=200, rested=0, deaths=0, activity: no samples yet", 1, true))
+        end)
+
+        it("the active session header shows its activity as percentages", function()
+            local session = Ledger.NewSession(0, 5)
+            session.ticks = { combat = 3, nonCombat = 1, travel = 0, dead = 0, total = 4 }
+
+            local text = Ledger.FormatState({ sessions = { session }, levels = {} })
+
+            assert.is_not_nil(text:find("Activity, % of samples: Combat 75.0% | Non-combat 25.0% | Travel 0.0% | Dead 0.0%", 1, true))
         end)
     end)
 end)

@@ -36,6 +36,7 @@ local function FormatSession(session)
         string.format("Active session: level %s, mode %s, manual=%s",
             tostring(session.level), session.mode or "none", tostring(session.manual)),
         string.format("Total XP: %d (rested: %d)", Ledger.TotalXP(session), Ledger.TotalRested(session)),
+        "Activity, % of samples: " .. Ledger.FormatTickSummary(session.ticks),
     }
 
     local count = Ledger.RecordCount(session, XP_SERIES)
@@ -71,17 +72,9 @@ local function FormatLevels(levels)
     local lines = { "Closed levels:" }
     for _, level in ipairs(levelNumbers) do
         local entry = levels[level]
-        local thresholds = "unknown"
-        if entry.thresholds then
-            thresholds = string.format("downtime=%ss/sustained=%ss",
-                tostring(entry.thresholds.downtime), tostring(entry.thresholds.sustainedMovement))
-        end
-        local played = "unknown (no reliable played-time data)"
-        if entry.totalPlayed and not entry.timeUnreliable then
-            played = string.format("%ds", entry.totalPlayed)
-        end
-        table.insert(lines, string.format("  level %s: xp=%d, rested=%d, time=%s, deaths=%d, thresholds=%s",
-            tostring(entry.level), entry.totalXP, entry.totalRested or 0, played, entry.deaths or 0, thresholds))
+        table.insert(lines, string.format("  level %s: xp=%d, rested=%d, deaths=%d, activity: %s",
+            tostring(entry.level), entry.totalXP, entry.totalRested or 0, entry.deaths or 0,
+            Ledger.FormatTickSummary(entry.ticks)))
     end
     return table.concat(lines, "\n")
 end

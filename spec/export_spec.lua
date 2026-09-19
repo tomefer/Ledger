@@ -11,7 +11,7 @@ describe("core/export.lua", function()
     before_each(function()
         Ledger = {}
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
-        assert(loadfile("Ledger/core/time_buckets.lua"))("Ledger", Ledger)
+        assert(loadfile("Ledger/core/ticks.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/events.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/export.lua"))("Ledger", Ledger)
     end)
@@ -115,42 +115,80 @@ describe("core/export.lua", function()
             assert.is_not_nil(text:find("# levels", 1, true))
             assert.is_not_nil(text:find("# sessions", 1, true))
             assert.is_not_nil(text:find("# events", 1, true))
-            assert.is_not_nil(text:find("level,reached,totalXP,totalRested,totalPlayed,deaths", 1, true))
+            assert.is_not_nil(text:find(
+                "level,reached,totalXP,totalRested,deaths,ticks_combat,ticks_nonCombat,ticks_travel,ticks_dead,ticks_total",
+                1, true))
         end)
     end)
 
-    describe("unknown played time is never exported as 0", function()
+    describe("activity ticks are exported as the raw counters, never as percentages", function()
         local function Charlie()
+            local session = Ledger.NewSession(0, 7)
+            session.ticks = { combat = 30, nonCombat = 50, travel = 15, dead = 5, total = 100 }
             return {
-                version = 8,
-                sessions = {},
+                version = 9,
+                sessions = { session },
                 levels = {
-                    [6] = { level = 6, reached = 100, totalXP = 500, totalRested = 0, timeUnreliable = true,
-                            deaths = 0, bySource = { kill = 500 }, curve = { 500 } },
-                    [7] = { level = 7, reached = 900, totalXP = 700, totalRested = 0, totalPlayed = 600,
-                            deaths = 0, bySource = { kill = 700 }, curve = { 700 } },
+                    [6] = { level = 6, reached = 100, totalXP = 500, totalRested = 0, deaths = 0,
+                            bySource = { kill = 500 }, curve = { 500 },
+                            ticks = { combat = 40, nonCombat = 30, travel = 20, dead = 10, total = 100 } },
                 },
             }
         end
 
-        it("JSON: null totalPlayed and lastKnown/levelStart, plus the timeUnreliable flag", function()
+        it("JSON: each level and session carries its counters, total included", function()
             local decoded, _, err = dkjson.decode(Ledger.ExportJSON(Charlie()))
 
             assert.is_nil(err)
+            assert.are.same({ combat = 40, nonCombat = 30, travel = 20, dead = 10, total = 100 },
+                decoded.levels[1].ticks)
+            assert.are.same({ combat = 30, nonCombat = 50, travel = 15, dead = 5, total = 100 },
+                decoded.sessions[1].ticks)
+        end)
+
+        it("JSON: none of the removed time fields is there", function()
+            local decoded = dkjson.decode(Ledger.ExportJSON(Charlie()))
+
             assert.is_nil(decoded.lastKnownTotalTimePlayed)
             assert.is_nil(decoded.levelStartTotalPlayed)
             assert.is_nil(decoded.levels[1].totalPlayed)
-            assert.is_true(decoded.levels[1].timeUnreliable)
-            assert.are.equal(600, decoded.levels[2].totalPlayed)
-            assert.is_false(decoded.levels[2].timeUnreliable)
+            assert.is_nil(decoded.levels[1].timeUnreliable)
+            assert.is_nil(decoded.levels[1].buckets)
+            assert.is_nil(decoded.sessions[1].buckets)
         end)
 
-        it("CSV: an empty totalPlayed cell (columns stay aligned) and the flag column", function()
+        it("CSV: the counters are columns, on levels and on sessions", function()
             local text = Ledger.ExportCSV(Charlie())
 
-            assert.is_not_nil(text:find("totalPlayed,deaths,timeUnreliable", 1, true))
-            assert.is_not_nil(text:find("6,100,500,0,,0,true", 1, true))
-            assert.is_not_nil(text:find("7,900,700,0,600,0,false", 1, true))
+            assert.is_not_nil(text:find("6,100,500,0,0,40,30,20,10,100", 1, true))
+            assert.is_not_nil(text:find("ticks_combat,ticks_nonCombat,ticks_travel,ticks_dead,ticks_total", 1, true))
+            assert.is_not_nil(text:find(",30,50,15,5,100", 1, true))
+        end)
+
+        it("a level or session without counters exports zeros instead of failing", function()
+            local decoded, _, err = dkjson.decode(Ledger.ExportJSON({
+                sessions = { { t0 = 1, level = 3, e = {} } },
+                levels = { [2] = { level = 2, bySource = {}, curve = {} } },
+            }))
+
+            assert.is_nil(err)
+            assert.are.equal(0, decoded.levels[1].ticks.total)
+            assert.are.equal(0, decoded.sessions[1].ticks.total)
+        end)
+    end)
+
+    describe("the /played reading is exported as information, or null", function()
+        it("JSON: null when there is no reading yet", function()
+            local decoded = dkjson.decode(Ledger.ExportJSON({ sessions = {}, levels = {} }))
+
+            assert.is_nil(decoded.played)
+        end)
+
+        it("JSON: the reading with the samples it was taken against", function()
+            local decoded = dkjson.decode(Ledger.ExportJSON({
+                sessions = {}, levels = {}, played = { level = 12, seconds = 2472, samples = 2450 } }))
+
+            assert.are.same({ level = 12, seconds = 2472, samples = 2450 }, decoded.played)
         end)
     end)
 
@@ -164,14 +202,12 @@ describe("core/export.lua", function()
 
             local charDB = {
                 version = 5,
-                lastKnownTotalTimePlayed = 9000,
-                levelStartTotalPlayed = 500,
                 sessions = { session },
                 levels = {
                     [11] = {
-                        level = 11, reached = 900, totalXP = 5000, totalRested = 200, totalPlayed = 3600,
+                        level = 11, reached = 900, totalXP = 5000, totalRested = 200,
                         deaths = 2, bySource = { kill = 4000, quest = 1000 }, curve = { 100, 200, 50 },
-                        buckets = { active = 1000, downtime = 500, travel = 2000, dead = 100 },
+                        ticks = { combat = 1000, nonCombat = 500, travel = 2000, dead = 100, total = 3600 },
                     },
                 },
             }
@@ -181,7 +217,6 @@ describe("core/export.lua", function()
 
             assert.is_nil(err)
             assert.are.equal(5, decoded.version)
-            assert.are.equal(9000, decoded.lastKnownTotalTimePlayed)
             assert.is_true(decoded.includeEvents)
             assert.are.equal(2, decoded.totalEventCount)
 
@@ -189,7 +224,7 @@ describe("core/export.lua", function()
             assert.are.equal(11, decoded.levels[1].level)
             assert.are.equal(4000, decoded.levels[1].bySource.kill)
             assert.are.same({ 100, 200, 50 }, decoded.levels[1].curve)
-            assert.are.equal(2000, decoded.levels[1].buckets.travel)
+            assert.are.equal(2000, decoded.levels[1].ticks.travel)
 
             assert.are.equal(1, #decoded.sessions)
             local s = decoded.sessions[1]

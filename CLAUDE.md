@@ -71,12 +71,9 @@ vez de suponer.
     se ha podido anclar y cuántos segmentos hay (sin depender de que el
     log esté activo): si no hay ninguno todavía es que no hay xp
     registrada en el nivel actual, no un fallo.
-  - `/ldg time`: muestra u oculta la barra de reparto de tiempo del
-    nivel (active/downtime/travel/dead), independiente de `/ldg bar`
-    (ver "Barra de reparto de tiempo" más abajo).
-  - (`/ldg recalc` ya no existe: se eliminó cuando la serie cruda pasó
-    a descartarse al cerrar cada nivel — ver "Buckets de tiempo" más
-    abajo; ya no hay nada que recalcular en los niveles cerrados.)
+  - `/ldg time`: muestra u oculta la barra de actividad del nivel
+    (combat/non-combat/travel/dead, siempre en porcentaje de muestras),
+    independiente de `/ldg bar` (ver "Barra de actividad" más abajo).
   - `/ldg rate`: muestra u oculta el número destacado de xp/hora de la
     sesión actual, anclado encima de la barra de composición de xp;
     pasar el ratón por encima abre un panel propio con el desglose
@@ -92,9 +89,9 @@ vez de suponer.
   - `/ldg export`: muestra u oculta el panel de exportación
     (`ui/export_frame.lua`), con el volcado completo de `LedgerCharDB`
     en JSON o CSV (ver "Exportación de datos" más abajo).
-  - `/ldg check`: muestra u oculta la ventana de reconciliación entre lo
-    registrado y la realidad (`ui/check_frame.lua`, ver "Reconciliación"
-    más abajo).
+  - `/ldg check`: muestra u oculta la ventana de reconciliación de la xp
+    registrada frente a la real, con el `/played` como dato informativo
+    (`ui/check_frame.lua`, ver "Reconciliación" más abajo).
   - `/ldg probe`: imprime al chat un diagnóstico de compatibilidad del
     cliente actual — versión de build/interface, presencia y valor de
     un puñado de APIs, cuántos global strings `COMBATLOG_XPGAIN_*`
@@ -188,7 +185,7 @@ hardcodear el stride al construir la curva por minuto.
 includeRested)` es el punto único que decide si el bono cuenta —
 `includeRested` es `true` por defecto (cuenta `xp` tal cual) o `false`
 (cuenta `xp - rested`). `Ledger.TotalXP(session, includeRested)` y
-`Ledger.CloseLevel(sessions, totalPlayed, includeRested)` (totales y
+`Ledger.CloseLevel(sessions, includeRested, xpRequired, levelTicks)` (totales y
 curva por minuto) lo aceptan como parámetro opcional; `XPBySource`
 sigue siendo siempre la xp total tal cual (desglose, no métrica de
 velocidad), y `TotalRested`/`entry.totalRested` son siempre el bono
@@ -210,38 +207,30 @@ session = {
                offsets DENTRO de la sesión en curso (sessionStartRef,
                local a ui/xp_capture.lua, nunca persistido) — ver
                "Captura de eventos" más abajo>,
-    tEnd    = <time() ABSOLUTO: lo refresca cada segundo el ticker de
-               muestreo (ui/xp_capture.lua: SampleTimeState) mientras la
-               sesión es la activa, así que en la activa es "visto vivo
-               por última vez" (nunca nil una vez ha corrido un tick), y
-               en una cerrada se queda congelado en el último tick;
-               /ldg reset lo fija además al instante exacto del cierre.
-               Es el denominador del xp/hora de una sesión leída de
-               datos guardados/exportados (la UI en vivo usa time() tal
-               cual, ver core/rate.lua)>,
+    tEnd    = <time() ABSOLUTO del cierre de la sesión, fijado solo por
+               /ldg reset (nil en la activa). Un sello de fecha, no una
+               métrica: nada calcula con él>,
     level   = <nivel del jugador al iniciar la sesión>,
     reached = <time() ABSOLUTO del instante en que se empezó a rastrear
                este nivel: el ding real si lo disparó una subida de
                nivel, o el instante de arranque si es la primera sesión
                en frío (mismo tipo de aproximación que initialXP: no se
-               puede saber el ding real de antes de instalar el addon)>,
+               puede saber el ding real de antes de instalar el addon).
+               Un sello de fecha, no una métrica>,
     mode    = <"farm" | "quest" | "dungeon" | nil>,  -- informativo; NUNCA
                                                        -- sobrescribe ni
                                                        -- altera el src de
                                                        -- ningún evento
     manual  = <true si se abrió con /ldg reset, false en las demás>,
     deaths  = 0,  -- contador de muertes DE ESTA SESIÓN (PLAYER_DEAD),
-                   -- aparte del bucket de tiempo "dead": cuánto tiempo
-                   -- se estuvo muerto no dice cuántas veces.
-    stateSeries = {
-        -- array plano de la serie state (Ledger.SERIES.state, ver
-        -- "Buckets de tiempo" abajo): un entero empaquetado por segundo
-        -- (combat/moving/dead/taxi), muestreado en vivo por
-        -- ui/xp_capture.lua: SampleTimeState. NO hay campo `buckets` en
-        -- la sesión: los buckets nunca se acumulan ni se guardan aquí,
-        -- siempre se derivan de esta serie con
-        -- Ledger.ComputeBucketsFromState cuando hacen falta.
-    },
+                   -- aparte del contador de actividad "dead": cuántas
+                   -- muestras se pasó muerto no dice cuántas veces.
+    ticks   = { combat = 0, nonCombat = 0, travel = 0, dead = 0,
+                total = 0 },
+                   -- contadores de actividad DE ESTA SESIÓN, incrementados
+                   -- en vivo por el muestreador (ver "Muestreo de
+                   -- actividad" abajo). Nunca una serie ni un array por
+                   -- tick, y nunca un porcentaje persistido.
     e = {
         -- array plano de la serie xp (ver Ledger.SERIES.xp arriba):
         -- off, xp, src, rested, off, xp, src, rested, ...
@@ -254,137 +243,96 @@ session = {
 }
 ```
 
-### Buckets de tiempo (`core/time_buckets.lua`)
+### Muestreo de actividad (`core/ticks.lua`)
 
-**Rediseñado 2026-09-18**: pasa de un tracker en vivo con reclasificación
-retroactiva a **estado crudo muestreado + reglas de agregación puras**:
-lo que se persiste es la señal cruda del nivel EN CURSO, y el bucket
-siempre se DERIVA de ella, nunca se acumula en vivo. **Ajustado
-2026-09-18 (análisis del SavedVariables real)**: la serie cruda solo
-vive mientras el nivel está en curso; al cerrarlo se agregan los
-buckets una vez y la serie se DESCARTA (guardarla entera en cada nivel
-cerrado no escala), guardando en su lugar los umbrales usados
-(`entry.thresholds`) para saber si dos niveles son comparables. Por eso
-`/ldg recalc` y `Ledger.RecalculateAllBuckets` se eliminaron: ya no hay
-serie cruda de niveles cerrados que reclasificar — un cambio de umbral
-solo afecta al nivel en curso (la barra en vivo se re-deriva siempre con
-los umbrales vigentes) y a los niveles que se cierren a partir de
-entonces.
+**Reescrito desde cero 2026-09-19; sin retrocompatibilidad** (lo anterior
+— tracker con reclasificación, serie cruda `stateSeries`, umbrales de
+"downtime"/"movimiento sostenido", buckets derivados, `totalPlayed` y todo
+el modelo de tiempo jugado del personaje — se ha borrado entero).
 
-**1) Muestreo crudo** (`ui/xp_capture.lua: SampleTimeState`, ticker de
-1s independiente del que vacía el matcher): cada segundo lee 4 flags
-instantáneos de verdad —
+**El ticker es un MUESTREADOR, no un reloj.** Cada segundo
+(`ui/xp_capture.lua: SampleTimeState`) lee el estado instantáneo del
+jugador, `Ledger.ClassifyActivity` lo convierte en UNA sola clave, y el
+contador de esa actividad sube en uno. Nada más: no se guarda nada por
+tick, no hay serie temporal de estado, no hay umbrales ni suavizado, no
+hay aritmética de tiempo de pared.
 
-- `combat` = `UnitAffectingCombat("player")`. A diferencia del diseño
-  anterior (que evitaba esta API a propósito porque se sale de combate
-  constantemente entre pull y pull), aquí SÍ se usa tal cual: el
-  suavizado de "hueco corto tras combate sigue siendo activo" ya no
-  vive en el muestreo, vive en la regla de agregación (ver más abajo).
-- `moving` = `GetUnitSpeed("player") > 0`, crudo e instantáneo también
-  (sin filtrar aquí "sostenido 3s": eso también es una regla de
-  agregación, ver `Ledger.MarkSustainedRuns` más abajo).
-  **Confirmado en el juego (WoW Forever beta, build 1.60.1, interface
-  16001, 2026-09-18)**: este cliente marca el valor devuelto por
-  `GetUnitSpeed` como "secret" — la llamada en sí no falla, pero
-  compararlo (`> 0`) revienta con `attempt to compare a secret number
-  value (execution tainted by 'Ledger')`, tainting nativo del motor
-  contra código de addon inseguro, no un `pcall` normal de API
-  ausente. `ui/xp_capture.lua: IsPlayerMoving()` envuelve también la
-  comparación en su propio `pcall` y degrada a "no se mueve" con un
-  aviso ERROR una sola vez por sesión — a diferencia del modo
-  degradado de la barra de xp (INFO, modo soportado), esto SÍ es una
-  pérdida real de datos: el bucket `travel` no se puede detectar en
-  absoluto en este cliente mientras siga así. Sin confirmar todavía si
-  Classic Era (1.15.x) tiene el mismo tainting o es exclusivo de esta
-  build de WoW Forever; añadir a `/ldg probe` si hace falta distinguir
-  entre "ausente" y "secreto" de un vistazo.
-- `dead` = `UnitIsDeadOrGhost("player")` — sustituye por completo a los
-  antiguos handlers `PLAYER_DEAD`/`PLAYER_UNGHOST` para este propósito
-  (`PLAYER_DEAD` se mantiene SOLO para el contador `deaths`, que es una
-  métrica distinta — ver "Cierre de nivel" arriba).
-- `taxi` = `UnitOnTaxi("player")`.
+Los contadores son **cuentas de muestras, no segundos garantizados**: si
+el cliente no está en primer plano (o cerrado) el ticker no corre, y eso
+es correcto por diseño — mide el tiempo que el addon realmente observó.
 
-Los 4 booleanos se empaquetan en un único entero
-(`Ledger.PackStateFlags`/`Ledger.UnpackStateFlags`, suma de potencias de
-2 — Lua 5.1 no tiene operadores bitwise nativos, así que la
-pertenencia se comprueba con aritmética: `math.floor(v/flag) % 2`) y se
-añaden como un registro más de una nueva serie declarativa,
-`Ledger.SERIES.state` (`core/series.lua`, `key = "stateSeries"`
-(antes `"st"`, unificado con el nombre que tenía en los niveles en la
-migración v6→v7), `stride = 1`,
-sin campo `off`: a diferencia de la serie `xp`, aquí la posición del
-array YA es el segundo — un nivel de dos horas son 7200 enteros
-pequeños). Se persiste con `Ledger.AppendRecord(session, Ledger.SERIES.state,
-packed)`, igual que cualquier otra serie.
+**Forma de los contadores** (`Ledger.NewTicks()`), la misma para una
+sesión (`session.ticks`), para el nivel en curso (`LedgerCharDB.levelTicks`)
+y para un nivel cerrado (`levels[n].ticks`):
 
-**2) Reglas de agregación** (`Ledger.ComputeBucketsFromState(rawArray,
-thresholds)`, función pura — el ÚNICO sitio donde se decide a qué
-bucket pertenece un segundo): recibe la serie cruda entera y un
-`thresholds` opcional (`{ downtime=, sustainedMovement= }`, por defecto
-`Ledger.DOWNTIME_THRESHOLD` = 15 y `Ledger.SUSTAINED_MOVEMENT_SECONDS`
-= 3, ambas constantes editables en código). Prioridad por segundo, de
-mayor a menor:
-1. `dead` → `"dead"` (siempre gana, incluso a mitad de combate: un
-   cadáver no está "activo").
-2. `combat` → `"active"`.
-3. movimiento sostenido (`Ledger.MarkSustainedRuns`, ver abajo) o
-   `taxi` → `"travel"`.
-4. si han pasado menos de `downtime` segundos desde el último segundo
-   con `combat` → `"active"` (hueco normal entre pulls).
-5. si no, `"downtime"`.
+```lua
+ticks = {
+    combat    = 0,
+    nonCombat = 0,
+    travel    = 0,
+    dead      = 0,
+    total     = 0,   -- suma de los cuatro, mantenida al incrementar
+}
+```
 
-`Ledger.MarkSustainedRuns(rawFlags, sustainedSeconds)` recibe la lista
-cruda de flags `moving` (uno por segundo) y devuelve una lista paralela
-de booleanos: verdadero para CADA segundo de una racha de al menos
-`sustainedSeconds` segundos consecutivos en movimiento — la racha entera
-cuenta desde su primer segundo en cuanto se confirma lo bastante larga,
-no solo a partir del enésimo (si no, un tramo real de travel perdería
-sus primeros 2 segundos). Una racha corta (reposicionarse, un proc de
-Sprint) que nunca llega al umbral se queda en `false` todo el rato.
+**Clasificación** (`Ledger.ClassifyActivity(state)`, pura;
+`state = { dead=, combat=, moving=, taxi= }`): actividades mutuamente
+excluyentes, una sola clave por muestra, por prioridad:
+1. muerto → `dead` (un cadáver no está "en combate", ni siquiera a mitad
+   de pelea);
+2. en combate → `combat`;
+3. en movimiento → `travel` (a pie, `GetUnitSpeed`, o en taxi,
+   `UnitOnTaxi`: ir en taxi también es moverse);
+4. resto → `nonCombat`.
 
-Los buckets pasan a ser **`active`, `downtime`, `travel`, `dead`**
-(antes `active`/`idle`/`travel`/`dead` — `idle` desaparece como
-concepto: ya no hace falta un estado especial "justo después de
-resucitar", `dead` se muestrea de forma continua e instantánea vía
-`UnitIsDeadOrGhost`, así que en cuanto deja de ser cierto el siguiente
-segundo ya cae solo en la regla que le toque).
+**Un tick** (`Ledger.RecordActivityTick(session, levelTicks, state)`):
+clasifica UNA vez y cuenta esa misma clave, con `Ledger.CountTick`
+(`ticks[clave] += 1`, `ticks.total += 1`; una clave desconocida es un
+error, no se rompe el total en silencio), **en vivo sobre las dos
+tablas**: la de la sesión activa y la del nivel en curso. Así un crash
+pierde como mucho los ticks desde el último guardado, no el nivel
+entero, y no hay nada que calcular al cerrar.
 
-**3) Dónde vive la serie cruda y dónde se deriva el bucket**:
-- `session[Ledger.SERIES.state.key]` (`session.stateSeries`): la serie
-  cruda DE ESTA sesión. Ya no existe `session.buckets` en absoluto — los
-  buckets nunca se acumulan ni se guardan en una sesión, siempre se
-  derivan.
-- Al cerrar un nivel, `core/level_close.lua: CloseLevel` concatena
-  `session.stateSeries` de TODAS las sesiones del nivel
-  (`Ledger.ConcatSeries(sessions, Ledger.SERIES.state)`), calcula
-  `entry.buckets = Ledger.ComputeBucketsFromState(serie, umbrales)` UNA
-  vez y **descarta la serie**: la entrada de `levels` no lleva
-  `stateSeries`. Guarda `entry.thresholds = { downtime=, sustainedMovement= }`
-  con los umbrales que produjeron esos buckets (por defecto
-  `Ledger.DOWNTIME_THRESHOLD`/`Ledger.SUSTAINED_MOVEMENT_SECONDS`;
-  `CloseLevel` acepta un `thresholds` opcional que los sobrescribe), y
-  `/ldg dump` los muestra por nivel (`thresholds=downtime=15s/sustained=3s`,
-  o `unknown` si el nivel es de antes de guardarlos).
-- Para el nivel EN CURSO (barra de reparto de tiempo en vivo,
-  `ui/time_bar.lua`), no hay tracker que "previsualizar": cada
-  redibujado concatena `Ledger.SERIES.state` de
-  `LedgerCharDB.sessions` tal cual y llama a
-  `Ledger.ComputeBucketsFromState` de cero — barato (como mucho unos
-  miles de enteros) y siempre exacto con los umbrales vigentes.
+**Al cerrar nivel** los contadores del nivel (`LedgerCharDB.levelTicks`)
+pasan tal cual a `entry.ticks` (por referencia, `Ledger.CloseLevel`), y
+`CloseCurrentLevel` empieza un `levelTicks` nuevo. Sin agregación ni
+recálculo posterior: no queda ninguna serie de la que recalcular. Un
+`/ldg reset` abre una sesión con sus propios contadores nuevos, y los del
+nivel siguen contando a través del reset.
 
-**`buckets` sigue siendo una métrica de reparto, NO de duración
-total**: `entry.totalPlayed` (ver "Entrada de `levels`" abajo) sigue
-saliendo de `TIME_PLAYED_MSG` del personaje, nunca de sumar los
-buckets — eso no ha cambiado con este rediseño.
+**Se muestra siempre en PORCENTAJE** (`Ledger.TickPercent(ticks, clave)` =
+`ticks[clave] / ticks.total * 100`, 0 si no hay muestras): sobre el total
+de muestras del nivel o de la sesión. Nunca en valores absolutos, para no
+invitar a cuadrarlos con nada externo (el `/played`, el reloj). Un
+porcentaje se deriva al mostrar y NUNCA se persiste. Formateadores puros:
+`Ledger.FormatTickLines` (una línea por actividad, para la barra) y
+`Ledger.FormatTickSummary` (una línea, para `/ldg dump` y `/ldg check`).
+(Los volcados de datos, `/ldg export`, sí escriben los contadores crudos:
+son el dato, no una presentación.)
 
-### Entrada de `levels` (`core/level_close.lua: CloseLevel(sessions, totalPlayed, includeRested)`)
+**Movimiento y `GetUnitSpeed` "secret"** (confirmado 2026-09-18 en la beta
+de WoW Forever, build 1.60.1): ese cliente marca el valor devuelto por
+`GetUnitSpeed` como "secret" — la llamada no falla, pero compararlo
+(`> 0`) revienta con `attempt to compare a secret number value`.
+`ui/xp_capture.lua: IsPlayerMoving()` envuelve también la comparación en
+su propio `pcall` y degrada a "no se mueve" con un aviso ERROR una vez
+por sesión: es una pérdida real de datos (la actividad `travel` a pie no
+se puede detectar mientras dure). En datos reales de esa beta no aparece
+nunca la combinación combate+movimiento en ~700 muestras de combate, lo
+que coincide con que el valor sea "secret" precisamente en combate; no
+afecta al reparto (el combate gana al movimiento en la prioridad), pero
+falta confirmarlo mirando `/ldg log show`. Sin confirmar si Classic Era
+(1.15.x) tiene el mismo tainting.
+
+### Entrada de `levels` (`core/level_close.lua: CloseLevel(sessions, includeRested, xpRequired, levelTicks)`)
 
 ```lua
 levels[level] = {
     level       = <nivel>,
-    reached     = <time() absoluto del ding que llevó a este nivel; 0 si
-                   viene de datos de antes de esta migración (no
-                   reconstruible retroactivamente) — ver sessions[1].reached>,
+    reached     = <time() absoluto del ding que llevó a este nivel, o del
+                   arranque si fue el primer nivel rastreado en frío
+                   (sessions[1].reached). Un sello de fecha, no una
+                   métrica>,
     initialXP   = <xp que el jugador ya llevaba en el nivel antes de que
                    el addon empezara a rastrearlo (sessions[1].initialXP,
                    0 si no hubo): la xp registrada + initialXP es lo que
@@ -393,25 +341,14 @@ levels[level] = {
     xpRequired  = <xp que ese nivel requería para completarse
                    (UnitXPMax del nivel viejo, `crossing.oldMax` de
                    Ledger.ComputeXPDelta, pasado por CloseCurrentLevel).
-                   Ausente en niveles cerrados antes de guardarlo: no hay
-                   API para pedirlo a posteriori — /ldg check los marca
-                   como "no verificable", no como discrepancia>,
+                   Puede faltar si el cierre no vino de un cruce con
+                   oldMax conocido: /ldg check lo marca entonces como "no
+                   verificable", no como discrepancia>,
     totalXP     = <suma de la xp EFECTIVA de todas las sesiones del
                    nivel, xp o xp-rested segun includeRested (true por
                    defecto); ver Ledger.EffectiveXP arriba>,
     totalRested = <suma del bono por descanso real, SIN toggle: no
                    cambia con includeRested>,
-    totalPlayed = <segundos jugados en el nivel, según TIME_PLAYED_MSG
-                   del personaje (NO la suma de buckets, que es una
-                   métrica aparte — ver "Buckets de tiempo" y "Cierre de
-                   nivel" más abajo); se pasa ya calculado, CloseLevel NO
-                   lo calcula. **`nil` si la línea base de tiempo era
-                   desconocida al cerrar** (ver "`totalPlayed` de un
-                   nivel"): nunca un 0 ni un número inventado>,
-    timeUnreliable = <`true` exactamente cuando `totalPlayed` es nil
-                   (dato de tiempo no fiable); AUSENTE en un nivel con
-                   tiempo válido, nunca `false`. Todo lo que lea
-                   `totalPlayed` debe saltarse estos niveles>,
     deaths      = <suma de session.deaths de todas las sesiones del nivel>,
     bySource    = { kill = ..., explore = ..., ... },  -- xp total tal
                                                          -- cual, nunca
@@ -423,15 +360,12 @@ levels[level] = {
                                                     -- cada sesion; xp
                                                     -- efectiva, tambien
                                                     -- sujeta a includeRested
-    buckets     = { active = 0, downtime = 0, travel = 0, dead = 0 },
-                    -- DERIVADO UNA VEZ al cerrar, de la serie state de
-                    -- todas las sesiones del nivel, con
-                    -- Ledger.ComputeBucketsFromState; la serie cruda se
-                    -- descarta (no hay entry.stateSeries)
-    thresholds  = { downtime = 15, sustainedMovement = 3 },
-                    -- umbrales con los que se derivaron esos buckets,
-                    -- para saber si dos niveles son comparables; ausente
-                    -- en niveles migrados desde antes de guardarlos
+    ticks       = { combat = 0, nonCombat = 0, travel = 0, dead = 0,
+                    total = 0 },
+                    -- los contadores de actividad del nivel
+                    -- (LedgerCharDB.levelTicks, incrementados en vivo),
+                    -- tal cual: sin agregar ni recalcular. Recuentos de
+                    -- muestras; se muestran siempre en porcentaje
 }
 ```
 
@@ -454,9 +388,11 @@ nunca por orden de inserción: si el addon se instala a mitad de partida
   `LedgerCharDB.sessions` (misma tabla, asignada por referencia en
   `StartTracking`, que corre en el primer `PLAYER_ENTERING_WORLD`), así
   que cada evento que se añade a una sesión persiste directamente en la
-  SavedVariable, sin ningún paso de guardado aparte. El tracker de
-  buckets y el matcher siguen viviendo solo en memoria (no se persisten
-  — ver "Pendiente" más abajo).
+  SavedVariable, sin ningún paso de guardado aparte. Los contadores de
+  actividad (`session.ticks`, `LedgerCharDB.levelTicks`) tampoco tienen
+  paso de guardado: se incrementan en vivo sobre la propia tabla
+  guardada. El matcher sí vive solo en memoria (no se persiste — ver
+  "Pendiente" más abajo).
 - **Cantidad de xp y subida de nivel** (`core/xp_delta.lua:
   Ledger.ComputeXPDelta`, lógica pura): la cantidad sale de comparar
   `UnitXP("player")` con el valor anterior en cada `PLAYER_XP_UPDATE`,
@@ -498,7 +434,7 @@ nunca por orden de inserción: si el addon se instala a mitad de partida
   del margen de emparejamiento, pero un hueco que no se cierra nunca es
   la firma de un bug que descarta xp en silencio — exactamente el caso
   del bug de subida de nivel de arriba. Vive en `ui/xp_capture.lua`
-  junto al matcher y al tracker de tiempo (solo en memoria, no se
+  junto al matcher (solo en memoria, no se
   persiste; aún no hay ningún sitio que lea `ReconciliationGap` para
   avisar en caliente si se dispara — ver "Pendiente").
 - El origen sale de
@@ -636,15 +572,12 @@ y llama a `EmitCrossingEvent(paired)`, que:
    el original también lo fuera) en la sesión todavía sin rotar —
    **esta es la entrada que completa el nivel viejo exactamente a su
    tope**, ni un punto más.
-3. Llama a `CloseCurrentLevel(t)`: calcula `totalPlayed` (ver "Buckets
-   de tiempo"/SavedVariables — NO es la suma de buckets),
-   `Ledger.CloseLevel` (que deriva `entry.buckets` de las series `state`
-   de las sesiones que cierran) + `Ledger.RecordLevelClose`, y abre la
-   sesión del nivel nuevo (`reached = time()`, snapshot de
-   `levelStartTotalPlayed`, `RequestTimePlayed()` para refrescar el
-   total cuanto antes), reiniciando `matcher`/`reconciler` (no hay
-   ningún tracker de tiempo que reiniciar: el muestreo de estado sigue
-   su curso solo, escribiendo en la sesión que esté activa en cada
+3. Llama a `CloseCurrentLevel(t, xpRequired)`: `Ledger.CloseLevel`
+   (agrega la xp de las sesiones y adjunta `LedgerCharDB.levelTicks` como
+   `entry.ticks`, tal cual) + `Ledger.RecordLevelClose`, empieza un
+   `levelTicks` nuevo, y abre la sesión del nivel nuevo (`reached =
+   time()`), reiniciando `matcher`/`reconciler` (el muestreo de actividad
+   sigue su curso solo, contando en la sesión que esté activa en cada
    momento).
 4. Graba `new` (mismo `src`) en la sesión recién rotada, en offset 0.
 
@@ -656,7 +589,7 @@ este camino — solo lo hace el arranque en frío de verdad
 xp").
 
 Diagnóstico: `CloseCurrentLevel` loguea a TRACE el nivel cerrado,
-sesiones agregadas, `totalXP`, `totalPlayed` y `muertes`.
+sesiones agregadas, `totalXP`, muestras totales y `muertes`.
 
 **Caso límite conocido, no nuevo de este cambio**: si una segunda
 ganancia de xp real ocurre mientras la del cruce todavía espera a su
@@ -676,192 +609,31 @@ Cierra la sesión activa (`session.tEnd = t`) y abre una nueva con
 cerrada se queda en la lista `sessions` hasta el cierre de nivel, porque
 `CloseLevel` agrega TODAS las sesiones del nivel, no solo la última.
 Una sesión manual se comporta igual que cualquier otra en todo lo demás
-(mismas series, mismo tracker de tiempo).
+(mismas series, mismos contadores de actividad: los suyos propios, nuevos).
 
-### `totalPlayed` de un nivel: tiempo jugado del PERSONAJE, no suma de buckets
+### `/played`: dato informativo, nunca una fuente
 
-`entry.totalPlayed` sale de restar dos totales de tiempo jugado DEL
-PERSONAJE (`TIME_PLAYED_MSG`, arg1 — el que reporta el propio servidor,
-siempre exacto), nunca de sumar los buckets de actividad: **autocorrige
-sesiones perdidas** (un login saltado, un crash) porque el total del
-personaje no depende de que este addon haya visto todo lo que ha
-pasado, a diferencia de los buckets, que solo cuentan lo que el tracker
-en memoria ha ido muestreando.
+**Sin tiempo jugado del personaje, sin línea base, sin estimación por
+`GetTime`, sin estado "no fiable" y sin invariantes de tiempo** (todo eso
+se borró 2026-09-19 junto con `totalPlayed`; el historial de por qué no
+funcionaba — una línea base copiada antes de que llegara la respuesta —
+queda en git). Los contadores de actividad (ver "Muestreo de actividad")
+son lo que son y no se contrastan con nada.
 
-- `LedgerCharDB.lastKnownTotalTimePlayed`: el último `arg1` recibido de
-  `TIME_PLAYED_MSG` — se actualiza siempre que llega, sin condición.
-  **Es un dato guardado, nunca se usa crudo en un cálculo** (ver
-  "Estimación entre respuestas" abajo).
-- `LedgerCharDB.levelStartTotalPlayed`: el total (estimado, ver abajo)
-  en el instante en que se empezó a rastrear el nivel EN CURSO.
-- `entry.totalPlayed = EstimatePlayedTotal(t) - levelStartTotalPlayed`
-  (recortado a 0 si saliera negativo, salvaguarda defensiva), calculado
-  SOLO por `Ledger.LevelPlayedTime(charDB, clock, now)`
-  (`core/played_baseline.lua`): el único sitio que resta la base, usado
-  tanto por el cierre de nivel como por el xp/hora en vivo del nivel.
-- `RequestTimePlayed()` se llama en `PLAYER_ENTERING_WORLD`, en
-  `CloseCurrentLevel` (justo después de avanzar la base) y tras un
-  `/ldg wipe`; la respuesta (asíncrona, vía `TIME_PLAYED_MSG`) no llega
-  a tiempo para el cierre que la disparó, pero re-ancla la estimación
-  para lo que venga después.
-
-**Estimación entre respuestas** (`Ledger.EstimatePlayedTotal(charDB,
-clock, now) = cached + (now - clock.receivedAt)`): `TIME_PLAYED_MSG`
-solo contesta cuando se le pide, así que el total cacheado se congela
-entre peticiones y, leído crudo, INFRAVALORA el total por el tiempo que
-hace que llegó (un nivel cerrado 20 min después de la última respuesta
-perdía esos 20 min). `receivedAt` es el `GetTime()` de recepción; el
-tiempo jugado avanza 1s por segundo mientras el personaje está conectado
-y `GetTime()` también, así que van a la par. `now` es siempre un
-parámetro (`core/` no toca el reloj): el cierre de nivel usa `t`, el
-`GetTime()` del propio evento de xp que cruza el ding (mejor que el
-instante en que acaba emparejándose), y `rate_frame` usa `GetTime()`.
-`now` puede quedar unos segundos ANTES de `receivedAt` (un ding cuya
-respuesta llegó un instante después): vale igual, el contador es
-monótono y restar el hueco es exacto. La base del nivel siguiente
-(`AdvancePlayedBaseline`) es la estimación en el ding, no el cacheado
-crudo, así que tampoco arrastra el desfase.
-
-- **`receivedAt` NUNCA se persiste** — vive en `Ledger.playedClock`
-  (`{ receivedAt=, awaiting= }`, en memoria, creado en `ui/events.lua`
-  junto a `logState`), no en `LedgerCharDB`. Motivo (tiempo
-  desconectado): `GetTime()` está documentado como el uptime del
-  SISTEMA, con lo que su origen no es el de los datos guardados: un
-  `receivedAt` guardado en una ejecución y comparado con el `GetTime()`
-  de la siguiente sería la diferencia de dos relojes sin relación —
-  arbitraria, posiblemente negativa, y (si `GetTime()` sigue corriendo
-  con el cliente cerrado, como haría un uptime de sistema) inflada con
-  todo el tiempo desconectado, que el tiempo jugado NO cuenta. Al vivir
-  solo en memoria eso es imposible por construcción, sin depender de la
-  semántica exacta de `GetTime()`: tras un `/reload` o reinicio el
-  nuevo estado Lua no tiene `receivedAt`, así que la estimación es
-  `nil` (desconocido) hasta la respuesta al `RequestTimePlayed` que
-  `PLAYER_ENTERING_WORLD` manda enseguida (milisegundos). El único
-  tramo que cubre la estimación es uno continuo con el personaje
-  conectado, donde `GetTime()` y el tiempo jugado avanzan juntos; una
-  pantalla de carga forma parte de ese tramo, y
-  `PLAYER_ENTERING_WORLD` vuelve a pedir el total tras cada una.
-  **Pendiente de confirmar en el cliente real** la premisa de que
-  `GetTime()` no avanza con el cliente cerrado: la documentación dice lo
-  contrario (uptime del sistema); no importa para la corrección, pero
-  `/ldg probe` imprime `GetTime()` para comprobarlo (ejecutarlo, reiniciar
-  el cliente, ejecutarlo otra vez: si el valor sigue subiendo es uptime
-  de sistema; si vuelve a empezar pequeño es relativo al cliente).
-- **Desconocido → `nil`**: si el total cacheado es `nil`, o no se recibió
-  en ESTE estado Lua (un valor guardado de una ejecución anterior no
-  tiene `receivedAt` fiable, y no se usa crudo), `EstimatePlayedTotal`
-  devuelve `nil`, `LevelPlayedTime` también, y el nivel se cierra con
-  `timeUnreliable` igual que con la base desconocida (ver abajo).
-
-**`nil` significa DESCONOCIDO, nunca cero** (bug real, wipe/instalación
-nueva: el primer nivel cerrado registró 01:37:15 jugados frente a
-00:16:16 entre dings, porque `CHAR_DEFAULTS` y `WipeCharacterData`
-dejaban la base a 0 y el cierre calculaba `lastKnown - 0` = el tiempo
-jugado TOTAL del personaje). El total no está disponible en el instante
-en que empieza el rastreo — `RequestTimePlayed` es asíncrono — así que
-`lastKnownTotalTimePlayed` y `levelStartTotalPlayed` **no tienen default**
-en `Ledger.CHAR_DEFAULTS` y valen `nil` mientras no se sepan. Las
-transiciones son lógica pura en `core/played_baseline.lua`
-(`StartPlayedBaseline`, `ApplyTimePlayed`, `LevelPlayedTime`,
-`AdvancePlayedBaseline`, `WipeCharDB`, `EstimatePlayedTotal`,
-`NewPlayedClock`), testeada en
-`spec/played_baseline_spec.lua`; `ui/xp_capture.lua` solo las llama.
-
-- **`clock.awaiting`** (en `Ledger.playedClock`, en memoria, a propósito
-  NO persistido): "la base es nil Y el próximo
-  `TIME_PLAYED_MSG` es el valor correcto para sembrarla". Se activa al
-  arrancar el rastreo en frío (`StartTracking` con `#sessions == 0`:
-  instalación nueva) y en `/ldg wipe`, y en `CloseCurrentLevel` si al
-  avanzar la base tampoco se sabía el total. `ApplyTimePlayed` siempre
-  refresca `lastKnown` y, solo si estaba esperando, siembra la base con
-  ese mismo valor (`TIME_PLAYED_MSG` trae el total del personaje, no el
-  del nivel: en el instante de arranque ambos coinciden). Una base nil
-  con `awaiting = false` (datos migrados, o la respuesta no llegó antes
-  de un `/reload`) se queda desconocida para siempre: sembrarla después
-  sería posterior al inicio real del nivel.
-- **`/ldg wipe`** (`Ledger.WipeCharDB`) vacía `levels`/`sessions` y
-  también olvida `lastKnownTotalTimePlayed` (pertenecía a los datos
-  borrados; el wipe no resetea el tiempo jugado del personaje, solo los
-  registros de Ledger) y deja la base desconocida hasta que llegue la
-  respuesta.
-- **Cierre con base o total desconocidos**: `totalPlayed = nil` y
-  `entry.timeUnreliable = true` (`Ledger.CloseLevel`), nunca un número
-  inventado. Un cierre que ocurre ANTES de que llegue la respuesta
-  también deja el nivel siguiente con base desconocida
-  (`AdvancePlayedBaseline` no copia un `lastKnown` que aún no es "ahora").
-- **Lectores** que respetan el nil: `/ldg check` (`skip`, "sin dato de
-  tiempo fiable", nunca discrepancia — no es un error del addon),
-  `ui/rate_frame.lua` (el "This level" del xp/hora sale como `"-"` en vez
-  de dividir por un número falso — es el único cálculo de xp/hora que
-  usa esta resta; los niveles cerrados no tienen ninguno),
-  `core/state_dump.lua` (`time=unknown (no reliable played-time data)`) y
-  `core/export.lua` (JSON `null` + `"timeUnreliable"`, y en CSV celda
-  vacía + columna `timeUnreliable`; también `lastKnownTotalTimePlayed`/
-  `levelStartTotalPlayed` salen `null`, nunca 0).
-- Los niveles cerrados ANTES de este arreglo conservan el `totalPlayed`
-  que tuvieran (no se destruye dato); `/ldg check` marca como
-  discrepancia los que rompen los invariantes de abajo.
-
-**Causa de fondo del `totalPlayed` erróneo en las versiones anteriores a
-0.9.0** (análisis de dos exports reales, 2026-09-19; el algoritmo viejo
-está reproducido en `spec/played_baseline_spec.lua`): al cerrar un
-nivel, `totalPlayed = lastKnown - base` y luego `base := lastKnown`, con
-`lastKnown` capturado ANTES de que llegara la respuesta de
-`RequestTimePlayed` pedida en ese mismo cierre. La base quedaba una
-respuesta por detrás, y como `lastKnown` solo se mueve cuando llega una
-respuesta (login, cierres, pantallas de carga), `totalPlayed` de un nivel
-salía como *(instante de la última respuesta antes de este cierre) menos
-(instante de la última respuesta antes del cierre anterior)*: en el caso
-típico, con respuestas solo en cada cierre, **la duración del nivel
-ANTERIOR** (un off-by-one exacto: 531 frente a los 530s del nivel previo),
-y con respuestas por pantallas de carga, un valor arbitrario en cualquiera
-de los dos sentidos. De ahí también que la suma de los `totalPlayed`
-escritos fuera EXACTAMENTE la base (`base := lastKnown` con base inicial
-0 telescopa: es una identidad, no un segundo fallo), y que el nivel en
-curso heredara el desfase. Nada en `PLAYER_ENTERING_WORLD` ni en un
-`/reload` escribe la base (los únicos escritores son
-`StartPlayedBaseline`, `WipeCharDB`, `AdvancePlayedBaseline`, la siembra
-de `ApplyTimePlayed` y la migración; y el flag `awaiting` no sobrevive a
-un `/reload`). El arreglo (0.9.0) es que la base al cerrar es el total
-ABSOLUTO estimado en el ding (`AdvancePlayedBaseline` →
-`EstimatePlayedTotal(t)`), nunca `base + totalPlayed` ni el cacheado
-crudo, así que un cierre erróneo ya no contamina los siguientes.
-
-### Invariantes del tiempo jugado (`core/level_time.lua`)
-
-Una sola definición, compartida por el cierre de nivel y por
-`/ldg check`, de qué es imposible en el `totalPlayed` de un nivel cerrado,
-contrastándolo con dos medidas independientes del contador del servidor:
-
-- **Cota superior**: nunca más que el tiempo de reloj entre el ding de
-  este nivel y el del siguiente (`reached` de cada uno; en el cierre, con
-  `time() - entry.reached`) → `exceeds-elapsed`.
-- **Cota inferior**: nunca menos que la suma de los buckets
-  (`Ledger.SumBuckets(entry.buckets)`): el ticker solo corre con el
-  cliente abierto, así que cada muestra es un segundo realmente jugado y
-  su suma es una cota inferior (se pueden perder ticks, p. ej. en una
-  pantalla de carga, pero nunca inventarse) → `below-samples`. Con datos
-  reales la suma queda 4–25s POR DEBAJO del tiempo real entre dings.
-- **Curva**: `curve` tiene una entrada por minuto de tiempo en juego, así
-  que no puede tener más de `floor((totalPlayed + tolerancia)/60) + 1`
-  entradas → `curve-too-long` (un nivel de 41 minutos con `totalPlayed` de
-  6 los rompía). Con datos reales el límite es justo (2552s → 43
-  entradas), por eso la tolerancia.
-- `Ledger.TIME_TOLERANCE = 60` s en las tres comparaciones (antes
-  `CHECK_TIME_TOLERANCE`, en `core/check.lua`).
-- Un `totalPlayed` `nil` (`timeUnreliable`) no tiene nada que comprobar.
-- **En el cierre** (`ui/xp_capture.lua: CloseCurrentLevel`): cada
-  violación se loguea a ERROR (`LevelClose invariant violated (level N,
-  id): ...`). La entrada se guarda tal cual se calculó, no se "corrige" en
-  silencio. El nivel de log por defecto es `trace` (desde 0.10.1), así que ese
-  ERROR queda en el buffer sin activar nada (`/ldg log show`), aunque el
-  buffer es un anillo de 200 entradas y el ruido TRACE lo va desplazando;
-  `/ldg check` lo vuelve a mostrar siempre.
-- **En `/ldg check`**: cada violación es una línea `[!!]` por nivel. La
-  antigua frase "not played: logged out or away" sobre un nivel que los
-  buckets desmienten era FALSA (el cliente estaba dentro del juego todo
-  ese tiempo); ahora solo sale en niveles que cumplen los invariantes, y
-  dice "logged out" (estar AFK sí cuenta como jugado).
+Lo único que queda de `/played`:
+- `TIME_PLAYED_MSG` (`arg2` = tiempo jugado en el nivel actual) se guarda
+  en su propio campo, `LedgerCharDB.played = { level=, seconds=, samples=
+  }` (`Ledger.RecordPlayedReading`, `core/ticks.lua`), junto con cuántas
+  muestras tenía el nivel en ese instante (para poder compararlos sin que
+  el tiempo que pase entre la petición y la lectura los desfase) y el
+  nivel del jugador al llegar la respuesta.
+- **No participa en ningún cálculo ni en ninguna métrica.** El único
+  lector es `/ldg check`, como línea informativa (ver "Reconciliación").
+- Se pide (`RequestTimePlayed`, siempre envuelto en `pcall`:
+  `Ledger.RequestPlayedReading`) en `PLAYER_ENTERING_WORLD`, tras un
+  `/ldg wipe confirm` y al abrir o refrescar la ventana de `/ldg check`;
+  al llegar la respuesta con esa ventana abierta se vuelve a pintar. Ya no
+  se pide al cerrar nivel (en ese instante daría ~0).
 
 ### Barra de composición de xp (`core/xp_bar.lua` + `ui/xp_bar.lua`, `/ldg bar`)
 
@@ -1029,60 +801,45 @@ solo cómo esa herramienta representa un frame sin nombre).
   "Diagnóstico de compatibilidad" abajo) para poder ver de un vistazo,
   en cualquier cliente, qué ancla se resolvió de verdad.
 
-### Barra de reparto de tiempo (`core/time_bar.lua` + `ui/time_bar.lua`, `/ldg time`)
+### Barra de actividad (`core/time_bar.lua` + `ui/time_bar.lua`, `/ldg time`)
 
 Paralela a la barra de composición de xp (mismo ancho y posición
-horizontal, misma altura, 2px de separación por encima), muestra cómo
-se reparte el tiempo del nivel actual entre los 4 buckets de
-`core/time_buckets.lua`. **Eje distinto al de la barra de xp**: aquí
-siempre ocupa el 100% del ancho (proporcional al tiempo total, no a un
-máximo externo) — las dos barras no son comparables píxel a píxel.
+horizontal, misma altura, 2px de separación por encima), muestra cómo se
+reparten las muestras del nivel actual entre las 4 actividades de
+`core/ticks.lua`. **Eje distinto al de la barra de xp**: aquí siempre
+ocupa el 100% del ancho (proporcional al total de muestras, no a un máximo
+externo) — las dos barras no son comparables píxel a píxel.
 
-- **Orden fijo** (`Ledger.TIME_BUCKET_ORDER = { "active", "downtime",
-  "travel", "dead" }`): siempre de izquierda a derecha en ese orden,
-  para que la forma sea reconocible de un vistazo — nunca reordenado
-  por tamaño, a diferencia de la barra de xp (que fusiona por orden de
-  llegada).
-- **Cálculo puro** (`core/time_bar.lua: Ledger.ComputeTimeBarSegments(buckets,
-  widthPx)`): reparte `widthPx` proporcionalmente al peso de cada
-  bucket sobre el total, reutilizando `Ledger.RoundedWidths` (expuesta
-  desde `core/xp_bar.lua` para esto) — misma técnica de redondeo por
-  acumulado que la barra de xp, así que tampoco aquí la suma de
-  anchuras supera nunca `widthPx`. Si el total es 0 (nivel recién
-  empezado, sin ninguna muestra todavía), no hay segmentos.
-- **Fuente de datos: TODAS las sesiones del nivel** (igual que la barra
-  de xp, nunca solo la activa), y siempre DERIVADA, nunca cacheada: cada
-  redibujado concatena la serie cruda de estado
-  (`Ledger.ConcatSeries(LedgerCharDB.sessions, Ledger.SERIES.state)`) y
-  la agrega de cero con `Ledger.ComputeBucketsFromState` (ver "Buckets
-  de tiempo" arriba) — no hay tracker en vivo que previsualizar, el
-  muestreo real de cada segundo ya deja el dato crudo ahí, así que la
-  barra crece sola sin ningún caso especial en este fichero.
+- **Orden fijo** (`Ledger.TICK_KEYS = { "combat", "nonCombat", "travel",
+  "dead" }`): siempre de izquierda a derecha en ese orden, para que la
+  forma sea reconocible de un vistazo — nunca reordenado por tamaño, a
+  diferencia de la barra de xp (que fusiona por orden de llegada).
+- **Cálculo puro** (`core/time_bar.lua: Ledger.ComputeTimeBarSegments(ticks,
+  widthPx)`): reparte `widthPx` proporcionalmente a `ticks[clave] /
+  ticks.total`, reutilizando `Ledger.RoundedWidths` (expuesta desde
+  `core/xp_bar.lua`) — misma técnica de redondeo por acumulado que la
+  barra de xp, así que la suma de anchuras no supera nunca `widthPx`. Sin
+  muestras todavía, no hay segmentos.
+- **Fuente de datos: `LedgerCharDB.levelTicks`**, los contadores en vivo
+  del nivel (que ya suman todas sus sesiones), leídos tal cual en cada
+  redibujado: no hay nada que concatenar ni derivar.
 - **Colores y borde: la MISMA `Ledger.PALETTE`** que la barra de xp
   (`ui/palette.lua`) — `travel` #4A6FA5 (azul apagado) y `dead` #8B3A3A
-  (rojo oscuro apagado) son entradas propias; `active` reutiliza el
-  color de `kill` (mismo dorado: es tiempo productivo) y `downtime` el
-  de `unknown` (mismo gris cálido) — ninguno es una copia del hex, son
-  el mismo objeto de color, así que si `kill`/`unknown` cambiaran algún
-  día estos les seguirían automáticamente. Mismo borde de 1px negro al
-  60% que la barra de xp (`ui/time_bar.lua: LayoutBorder`, código casi
-  idéntico al de `ui/xp_bar.lua`).
-- **Render**: a diferencia del pool dinámico de la barra de xp, aquí
-  hay una textura fija por bucket (siempre son los mismos 4, en el
-  mismo orden) — no hace falta un pool. `Ledger.RedrawTimeBar()` se
-  llama **desde el mismo ticker de 1s que muestrea el estado crudo**
-  (`ui/xp_capture.lua: SampleTimeState`), **nunca desde los eventos de
-  xp**: los tramos de viaje/downtime/muerte no generan ningún evento de
-  xp — atarlo a las kills dejaría la barra congelada la mayor parte del
-  tiempo.
-- **Tooltip**: `core/time_bar.lua: Ledger.FormatTimeBarTooltip(buckets)`
-  (función pura) devuelve una línea por bucket con su tiempo absoluto
-  en `hh:mm:ss` (`Ledger.FormatHHMMSS`) y su porcentaje del total;
-  `ui/time_bar.lua` colorea cada línea con `Ledger.PALETTE[bucket]` al
-  pintarla en el `GameTooltip`.
-- `/ldg time` alterna `LedgerDB.timeBarShown` y muestra/oculta el
-  frame — **independiente de `/ldg bar`**, cada una se muestra u oculta
-  por su cuenta.
+  (rojo oscuro apagado) son entradas propias; `combat` reutiliza el color
+  de `kill` (mismo dorado) y `nonCombat` el de `unknown` (mismo gris
+  cálido) — el mismo objeto de color, no una copia del hex. Mismo borde de
+  1px negro al 60% que la barra de xp.
+- **Render**: una textura fija por actividad (siempre son las mismas 4, en
+  el mismo orden), sin pool. `Ledger.RedrawTimeBar()` se llama **desde el
+  mismo ticker de 1s que muestrea la actividad** (`ui/xp_capture.lua:
+  SampleTimeState`), **nunca desde los eventos de xp**: los tramos de
+  viaje/no-combate/muerte no generan ningún evento de xp.
+- **Tooltip: solo porcentajes**, nunca tiempos absolutos.
+  `Ledger.FormatTickLines(ticks)` (pura) da una línea por actividad
+  (`"Combat: 42.3%"`); `ui/time_bar.lua` las pinta con `Ledger.PALETTE[clave]`
+  para el nivel y, debajo, para la sesión activa.
+- `/ldg time` alterna `LedgerDB.timeBarShown` y muestra/oculta el frame —
+  **independiente de `/ldg bar`**.
 
 ### Número principal de xp/hora (`core/rate.lua` + `ui/rate_frame.lua`, `/ldg rate`)
 
@@ -1099,7 +856,7 @@ redibuje (incluido su propio modo degradado — ver "Localización de la
 barra nativa" arriba), sin ningún código adicional aquí.
 
 - **El número**: xp/hora de la **sesión activa** (`Ledger.TotalXP(session,
-  includeRested) / (time() - session.t0) * 3600`, ver
+  includeRested) / session.ticks.total * 3600`, ver
   `core/rate.lua: Ledger.ComputeXPRate`), nunca del nivel — ese es el
   dato del panel al pasar el ratón (ver abajo). Tipografía
   `GameFontNormalHuge`, blanco (`text:SetTextColor(1,1,1,1)`), sobre
@@ -1112,14 +869,22 @@ barra nativa" arriba), sin ningún código adicional aquí.
   hasta que `gsub` deja de encontrar más, sin ninguna librería) y
   sufijo `" xp/h"`. `nil` (ver el umbral justo abajo) se formatea como
   `"-"`, nunca como `"0 xp/h"` ni un número inventado.
-- **Guion con menos de un minuto de sesión**
-  (`Ledger.RATE_MIN_SECONDS = 60`, `core/rate.lua: Ledger.ComputeXPRate`):
-  por debajo de ese umbral de segundos transcurridos, el denominador es
-  tan pequeño que la tasa sale disparada (50xp en 5s son 36000 xp/h) —
-  `ComputeXPRate` devuelve `nil` y `FormatXPRate` lo convierte en `"-"`.
-  Un numerador a 0 con tiempo transcurrido de sobra sigue siendo una
-  tasa real de `0` (no un guion): el guion es solo por denominador
-  pequeño, nunca por xp pequeña o nula.
+- **El denominador son MUESTRAS, no reloj**: cada muestra del muestreador
+  cuenta como un segundo (`session.ticks.total` para la sesión,
+  `LedgerCharDB.levelTicks.total` para el nivel), nunca el tiempo de pared
+  ni el `/played`. Es "xp por hora de tiempo que el addon observó": el
+  tiempo con el cliente parado no está en el denominador, por diseño (ver
+  "Muestreo de actividad"). Decisión de esta reescritura: el xp/hora
+  necesita un denominador y no se le permite usar tiempo de pared; el
+  total de muestras es la única fuente que queda. Es la única
+  presentación con horas, y es una tasa, no un tiempo mostrado.
+- **Guion con menos de 60 muestras** (`Ledger.RATE_MIN_SAMPLES = 60`,
+  `core/rate.lua: Ledger.ComputeXPRate`): por debajo de ese umbral el
+  denominador es tan pequeño que la tasa sale disparada (50xp en 5
+  muestras son 36000 xp/h) — `ComputeXPRate` devuelve `nil` y
+  `FormatXPRate` lo convierte en `"-"`. Un numerador a 0 con muestras de
+  sobra sigue siendo una tasa real de `0` (no un guion): el guion es solo
+  por denominador pequeño, nunca por xp pequeña o nula.
 - **Respeta `includeRested`**: `Ledger.ComputeHeadlineRates` recibe el
   toggle (`LedgerDB.includeRested`) y lo reenvía a `Ledger.TotalXP`/
   `Ledger.TotalXPAcrossSessions` para las dos tasas (sesión y nivel) —
@@ -1185,8 +950,9 @@ rehacerse.
 formateados `mm:ss.t | xp | src | descanso=N` con `Ledger.FormatOffset`
 (`src` ya traducido de vuelta a texto vía `Ledger.SRC_NAMES`, nunca el
 ID numérico crudo), que no asume ningún límite superior de minutos) +
-resumen de `levels` ordenado por nivel (incluye `totalRested` y
-`deaths` de cada uno). Lee
+resumen de `levels` ordenado por nivel (incluye `totalRested`, `deaths`
+y la actividad del nivel en porcentaje — `Ledger.FormatTickSummary`, nunca
+tiempos absolutos; la cabecera de la sesión activa lleva la suya). Lee
 `charDB.sessions`/`charDB.levels`
 (la forma de `LedgerCharDB`) que se le pasa como parámetro — nunca
 `LedgerCharDB` directamente ni ninguna API de WoW — e itera
@@ -1221,6 +987,11 @@ juego.
   totales (`Ledger.TotalXP`/`TotalRested`/`XPBySource`) por su cuenta.
   Itera `Ledger.SERIES.xp` igual que `state_dump.lua`, por la misma
   regla dura de `core/series.lua`.
+- **Actividad**: cada nivel y cada sesión llevan sus contadores CRUDOS
+  (`ticks`: `combat`/`nonCombat`/`travel`/`dead`/`total`; en CSV, columnas
+  `ticks_*`) — los contadores son el dato, nunca un porcentaje ni un
+  tiempo derivado. El JSON lleva además `played` (la lectura informativa
+  de `/played`, o `null`). No hay campos de tiempo jugado.
 - **JSON escrito a mano**: no hay ninguna librería JSON disponible en
   el sandbox del addon y no se pueden añadir dependencias externas
   (ver "Restricciones" arriba), así que el encoder no es genérico —
@@ -1323,24 +1094,21 @@ muestra el texto. Tests en `spec/check_spec.lua`.
   `bySource` y no `totalXP` porque este depende del `includeRested` que
   hubiera al cerrar (no se guarda). Un nivel sin `xpRequired` (cerrado
   antes de guardarlo) sale como `skip`.
-- **Niveles cerrados, tiempo**: `entry.totalPlayed` frente a
-  `nextReached - entry.reached`, donde `nextReached` sale de
-  `levels[n+1].reached` o, si `n+1` es el nivel en curso, de
-  `sessions[1].reached`. Solo se marca la dirección imposible: jugado
-  MAYOR que el tiempo de reloj entre dings (más `Ledger.TIME_TOLERANCE`
-  = 60s de margen), MENOR que la suma de los buckets, o con una curva
-  demasiado larga (invariantes de `core/level_time.lua`, ver "Invariantes
-  del tiempo jugado"); jugado menor que el tiempo entre dings, sin más,
-  es normal (tiempo desconectado no cuenta) y se muestra como dato.
-  También se marca si los dings salen desordenados. `reached = 0`, `n+1` sin seguimiento o sin `reached`
-  → `skip`. Un nivel con `timeUnreliable` (o sin `totalPlayed`) también
-  → `skip`, "no reliable played-time data", explícitamente no un error
-  del addon (ver "`totalPlayed` de un nivel"). Sospechoso principal de
-  un desfase real: la base `levelStartTotalPlayed` desalineada (ver
-  "Pendiente").
+- **Tiempo (solo información, nunca una discrepancia)**: no hay
+  invariantes de tiempo (los contadores son lo que son). La sección
+  "Time (information only)" muestra la actividad del nivel y de la sesión
+  activa en porcentaje de muestras (`Ledger.FormatTickSummary`) y la
+  última lectura de `/played` (`charDB.played`) junto a las muestras que
+  tenía el nivel en ese instante, con su diferencia: `"/played, this
+  level: 2472s played vs 2450 samples at that moment, difference +22"` y
+  una nota de que no es un error (las muestras solo corren con el cliente
+  en marcha). Todas son líneas `info`: una diferencia, en el sentido que
+  sea, nunca hace fallar el veredicto. Si no hay lectura, o es de otro
+  nivel, lo dice. Ver "`/played`: dato informativo".
 - **Xp pendiente de emparejar** (hasta ~1s dentro del matcher) puede
   verse como un negativo transitorio justo tras un kill o un ding: la
-  ventana lo avisa en sus notas; el botón `Refresh` la relee.
+  ventana lo avisa en sus notas; el botón `Refresh` la relee (y vuelve a
+  pedir la lectura de `/played`).
 - **Ventana**: `ui/text_window.lua: Ledger.CreateTextWindow(opts)` es la
   fábrica compartida con `/ldg export` (frame movible/redimensionable +
   EditBox multilínea de solo lectura en un ScrollFrame, contenido ya
@@ -1354,9 +1122,7 @@ muestra el texto. Tests en `spec/check_spec.lua`.
 se abra, se pueda mover/redimensionar, quede el texto seleccionado y
 Escape la cierre — es exactamente el mismo mecanismo que `/ldg export`,
 que tampoco está confirmado; y que tras refactorizar `/ldg export` sobre
-la fábrica siga comportándose igual. Los niveles cerrados con esta
-versión ya llevan `xpRequired`/`initialXP`; los anteriores saldrán como
-`skip` en la comprobación de xp.
+la fábrica siga comportándose igual.
 
 ### Diagnóstico de compatibilidad (`core/probe.lua` + `ui/probe.lua`, `/ldg probe`)
 
@@ -1379,9 +1145,7 @@ o que casca al llamarla no impide ver el resto del informe.
   está corriendo sobre Classic Era o sobre WoW Forever.
 - **APIs concretas probadas** (`UnitXP`, `UnitXPMax`, `GetXPExhaustion`,
   `RequestTimePlayed`, `UnitOnTaxi`, `GetUnitSpeed`, `UnitAffectingCombat`,
-  `UnitIsDeadOrGhost`, `GetTime`, orden fijo — esta última no alimenta
-  el muestreo de estado sino la estimación del tiempo jugado, ver
-  "`totalPlayed` de un nivel"): cada una se marca `absent` si el
+  `UnitIsDeadOrGhost`, orden fijo): cada una se marca `absent` si el
   global no es una función, o si lo es, se llama con `pcall` (con
   `"player"` como único argumento las que lo necesitan) y se marca
   `present, value = ...` con cada valor devuelto (`tostring` de cada
@@ -1389,8 +1153,8 @@ o que casca al llamarla no impide ver el resto del informe.
   devuelve nada, sale como "no return value" en vez de una fila de
   `nil`s) o `present, call failed (...)` si `pcall` atrapó un error.
   Las 4 últimas (`UnitOnTaxi`/`GetUnitSpeed`/`UnitAffectingCombat`/
-  `UnitIsDeadOrGhost`) alimentan de verdad el muestreo crudo de estado
-  (`ui/xp_capture.lua: SampleTimeState`, ver "Buckets de tiempo"
+  `UnitIsDeadOrGhost`) alimentan de verdad el muestreo de actividad
+  (`ui/xp_capture.lua: SampleTimeState`, ver "Muestreo de actividad"
   arriba) — no son solo una curiosidad de cara al futuro, por eso vale
   la pena comprobarlas en cualquier cliente nuevo al que se porte el
   addon.
@@ -1414,11 +1178,12 @@ o que casca al llamarla no impide ver el resto del informe.
 **Degradación con gracia fuera del propio probe**: `RequestTimePlayed`
 (el único de los API arriba con un punto de llamada real, en
 `ui/xp_capture.lua`, aparte del probe) nunca se llama a pelo —
-`SafeRequestTimePlayed()` (local a ese fichero) comprueba que es una
-función antes de llamarla y envuelve la llamada en `pcall`. Si falta o
-casca en un cliente dado, `lastKnownTotalTimePlayed` simplemente se
-queda en su último valor conocido en vez de refrescarse — no hay
-ninguna otra `RequestTimePlayed()` suelta en el resto del código.
+`SafeRequestTimePlayed()` (local a ese fichero, expuesta como
+`Ledger.RequestPlayedReading`) comprueba que es una función antes de
+llamarla y envuelve la llamada en `pcall`. Si falta o casca en un cliente
+dado, `LedgerCharDB.played` simplemente no se refresca (solo alimenta una
+línea informativa de `/ldg check`) — no hay ninguna otra
+`RequestTimePlayed()` suelta en el resto del código.
 `UnitXP`/`UnitXPMax` (el resto de lo listado en `/ldg probe` con un uso
 real) se quedan sin envolver a propósito: son el núcleo del addon, no
 hay ningún modo degradado con sentido si no existen — si un cliente no
@@ -1434,8 +1199,8 @@ global strings `COMBATLOG_XPGAIN_*` en interface 16001.
 
 ### Sistema de log (`core/log.lua`)
 
-Estado en memoria (no persistido, igual que el tracker de buckets y el
-matcher — ver "Pendiente" más abajo), creado en `ui/events.lua` como
+Estado en memoria (no persistido, igual que el matcher — ver
+"Pendiente" más abajo), creado en `ui/events.lua` como
 `Ledger.logState = Ledger.NewLogState()`:
 
 ```lua
@@ -1498,99 +1263,36 @@ arriba:
 
 ### SavedVariables
 
+- **Versión del esquema y SIN migraciones** (`Ledger.DB_VERSION`, hoy 9,
+  `core/xp.lua`): si al cargar la versión guardada de `LedgerCharDB` no
+  coincide con la actual (más antigua, más nueva o inexistente en datos
+  que no están vacíos), `Ledger.InitCharDB` descarta TODO el contenido y
+  arranca limpio — no hay `MigrateDB` ni se intenta conservar nada.
+  `InitCharDB` devuelve `db, wiped, oldVersion`, y `ui/events.lua` lo dice
+  en el chat al hacer login (`saved data was version N, this addon uses
+  version M: this character's data was wiped and tracking starts clean`):
+  nunca en silencio. Una tabla nil o vacía (primera carga) no cuenta como
+  wipe. **Hay que subir `DB_VERSION` cada vez que cambie la forma de
+  `LedgerCharDB`.** (v9 = el modelo de contadores de actividad; todas las
+  versiones anteriores, con sus migraciones v1→v8, se borraron.)
 - `LedgerDB` (cuenta, `## SavedVariables`): `pos`, `shown`, `version`,
   `includeRested` (toggle de `/ldg rested`, `true` por defecto),
-  `barShown`/`barHeight`/`timeBarShown` (barras). `version` está en 8
-  (`Ledger.DB_VERSION`); `core/xp.lua: MigrateDB(db)` sube cualquier
-  `db` por debajo de la versión actual:
-  - v1→v2: solo estampa el número de versión (esquema previo a las
-    series declarativas; no había sesiones/niveles persistidos bajo el
-    esquema viejo que traducir).
-  - v2→v3: reescribe el array plano `e` de cada sesión de
-    `db.sessions` (si las hay: `LedgerDB` no tiene `sessions` y este
-    paso no hace nada en ese caso) del stride viejo (3: `off, xp, src`)
-    al nuevo (4: añade `rested = 0` a todo lo existente, porque no hay
-    forma de saber retroactivamente cuánto de esa xp ya grabada era
-    bono por descanso). Usa los mismos helpers genéricos de
-    `core/series.lua` (`RecordCount`/`ReadRecord`/`AppendRecord`) para
-    leer con el esquema viejo (congelado como `XP_SERIES_V2`, solo para
-    esta migración) y escribir con `Ledger.SERIES.xp` vigente — es
-    exactamente la prueba de que el modelo de series declarativas
-    funciona de verdad sin tocar nada a pelo fuera de esos helpers.
-  - v3→v4: rellena `session.buckets` a cero (`Ledger.NewEmptyBuckets()`)
-    en cualquier sesión que no lo trajera — igual que `rested = 0` en la
-    v2→v3, no hay forma de reconstruir retroactivamente cómo se repartió
-    el tiempo ya jugado bajo el esquema viejo (el tracker de buckets
-    vivía solo en memoria hasta esta versión, nunca se persistía).
-  - v4→v5 (Análisis del SavedVariables real, 2026-09-17), dos cambios
-    en el mismo pase por sesión (`MigrateSessionToV5`) más el relleno
-    de las entradas de `levels` ya cerradas:
-    1. `off` se redondea a entero (`math.floor(off + 0.5)`): el esquema
-       viejo lo dejaba con la imprecisión de coma flotante de
-       `(GetTime()-t0)*10`.
-    2. `src` se traduce de texto a `Ledger.SRC_IDS` si todavía es
-       string (no repite la traducción si ya es numérico).
-    3. `session.deaths`/`entry.deaths`/`entry.reached` se rellenan a 0
-       si faltan — igual que `rested = 0` en v2→v3, no reconstruibles
-       retroactivamente.
-    El campo `level` (antes `nivel` en el esquema original del addon,
-    cuando se llamaba XPTrack) ya no se traduce en esta migración: no
-    hay ninguna SavedVariable real por ahí fuera con el campo viejo
-    (proyecto de un solo usuario, borrable sin coste), así que se quitó
-    el paso de renombrado en vez de mantenerlo como código muerto.
-    `session.t0` **NO se traduce**: no hay forma de convertir
-    retroactivamente un `GetTime()` viejo (tiempo de actividad del
-    cliente) a un `time()` absoluto una vez perdida la correspondencia
-    entre ambos relojes. Solo las sesiones nuevas a partir de esta
-    versión usan `time()` — ver "Sesión activa" arriba.
-  - v5→v6 (rediseño de los buckets de tiempo, ver "Buckets de tiempo"
-    arriba): `session.buckets` desaparece por completo (se pone a `nil`
-    si existía) y se garantiza una serie de estado vacía (entonces `session.st`, hoy `session.stateSeries`) si no existiera ya —
-    las sesiones en curso nunca vuelven a acumular buckets, solo
-    muestrean crudo. Los niveles ya cerrados (`db.levels`) reciben
-    `entry.stateSeries = {}` y `entry.buckets` recién puesto a cero en
-    la forma nueva (`active`/`downtime`/`travel`/`dead`): el reparto
-    viejo (`active`/`idle`/`travel`/`dead`) clasificaba una señal
-    distinta (un tracker en vivo con reclasificación retroactiva) y no
-    es traducible a las reglas nuevas, así que no hay forma de
-    reconstruirlo retroactivamente — mismo criterio que `rested = 0` en
-    v2→v3.
-  - v6→v7 (análisis del SavedVariables real, 2026-09-18): la serie
-    cruda solo vive en el nivel en curso. Las sesiones en curso mueven
-    `session.st` a `session.stateSeries` (sin perder muestras; no pisa
-    una `stateSeries` que ya exista). Los niveles ya cerrados
-    DESCARTAN su `stateSeries` (los `buckets` ya derivados se quedan) y
-    reciben `entry.thresholds` con los umbrales vigentes solo si tenían
-    muestras (sus buckets se derivaron con esas constantes); un nivel
-    con serie vacía (migrado desde v5, buckets a cero) no tiene
-    umbrales conocidos y se queda sin el campo.
-  - v7→v8 (bug del tiempo jugado del primer nivel tras wipe/instalación
-    nueva, ver "`totalPlayed` de un nivel"): la base de tiempo jugado
-    pasa de "0 por defecto" a "nil = desconocido".
-    `lastKnownTotalTimePlayed = 0` (solo pudo significar "nunca
-    recibido") vuelve a nil. `levelStartTotalPlayed = 0` se conserva
-    únicamente si el nivel en curso es el 1 (el personaje de verdad no
-    había jugado nada); en cualquier otro nivel es el bug, y vuelve a
-    nil SIN resembrarse con el próximo `TIME_PLAYED_MSG` (sería más
-    tarde que el inicio real del nivel): ese nivel se cierra con
-    `timeUnreliable`. **Ampliado**: cualquier `levelStartTotalPlayed`
-    distinto de cero en datos v7 también vuelve a nil (excepto el 0 de un
-    personaje en nivel 1), porque toda base escrita por una versión
-    anterior a 0.8.0 iba una respuesta por detrás (ver "Causa de fondo").
-    Supuesto: ningún dato v8 procede de la 0.8.0 con base cacheada (esa
-    versión, igual que la 0.7, copiaba el `lastKnown` sin extrapolar y
-    tampoco es fiable; solo la 0.9.0 escribe bases correctas). Los
-    niveles ya cerrados no se tocan.
+  `barShown`/`barHeight`/`timeBarShown` (barras), `barDefaultPos`/
+  `barDefaultWidth`, `rateShown`, `ratePos`. **Nunca se borra por cambio de
+  versión**: son ajustes de interfaz que no dependen del esquema de datos;
+  `Ledger.InitDB(db, defaults)` solo rellena lo que falte y estampa la
+  versión.
 - `LedgerCharDB` (por personaje, `## SavedVariablesPerCharacter`):
-  `{ version, levels, sessions, lastKnownTotalTimePlayed,
-  levelStartTotalPlayed }` (los dos últimos, sin default y `nil` =
-  desconocido; ver "`totalPlayed` de un nivel" arriba). Se inicializa en `ADDON_LOADED` con `LedgerCharDB =
-  Ledger.InitCharDB(LedgerCharDB)` (`core/xp.lua`), que reutiliza
-  `InitDB`/`MigrateDB` con `Ledger.CHAR_DEFAULTS` — nunca pisa lo que ya
-  hubiera, solo rellena lo que falte y migra la versión. `sessions` es
-  la lista de sesiones del nivel en curso (ver arriba); `levels[level]`
-  guarda el resultado de `CloseLevel`, indexado por nivel real (ver
-  "Entrada de `levels`" arriba).
+  `{ version, levels, sessions, levelTicks, played }`. `levels[level]`
+  guarda el resultado de `CloseLevel` (con sus `ticks`), indexado por
+  nivel real (ver "Entrada de `levels`"); `sessions` es la lista de
+  sesiones del nivel en curso, cada una con sus `ticks`; `levelTicks` son
+  los contadores en vivo del nivel en curso (al cerrarlo pasan a
+  `entry.ticks`); `played` es la lectura informativa de `/played`
+  (opcional, ver "`/played`"). Se inicializa en `ADDON_LOADED` con
+  `LedgerCharDB = Ledger.InitCharDB(LedgerCharDB)`
+  (`core/xp.lua`), que rellena lo que falte con `Ledger.CHAR_DEFAULTS`
+  (más un `levelTicks` vacío) y aplica la regla de versión de arriba.
   - **Historial de este bug**: primero se declaró en el `.toc` sin
     ningún código que la tocara (quedaba en `nil`). Se corrigió con
     `LedgerCharDB = LedgerCharDB or {}`, pero eso solo crea el
@@ -1621,37 +1323,10 @@ falta en el `.toc`).
 
 ### Pendiente de definir (se irá completando en próximas sesiones)
 
-- `tEnd` ya lo refresca el ticker de 1s en la sesión activa (ver "Sesión
-  activa"), así que tras un logout/desconexión sin pasar por reset queda
-  en el último segundo visto; al próximo login la sesión sigue abierta
-  y se le sigue añadiendo eventos (y el ticker vuelve a moverle `tEnd`).
-  Sigue sin decidir si al reabrir tras un hueco largo conviene abrir una
-  sesión nueva en vez de continuar la vieja.
-- **Comprobar en el juego `totalPlayed` tras el análisis del
-  SavedVariables real** (2026-09-18): se observó `levelStartTotalPlayed=3534`
-  con `lastKnownTotalTimePlayed=4343` (diferencia 809 = duración ya
-  registrada del nivel anterior, es decir, base un nivel por detrás).
-  El código de `CloseCurrentLevel` ya calcula `totalPlayed` con la base
-  vigente y DESPUÉS la avanza al total actual desde `1e8a942`, así que
-  se sospecha una build desplegada anterior; `CloseCurrentLevel` ahora
-  loguea a TRACE `lastKnown`/`levelStart` de cada cierre y el avance de
-  la base para poder confirmarlo. (La causa que se sospechaba como
-  alternativa, un `lastKnownTotalTimePlayed` obsoleto en el instante del
-  cierre, ya está resuelta: se extrapola con `GetTime()`, ver
-  "Estimación entre respuestas" en "`totalPlayed` de un nivel".)
-- **Verificar en el juego el arreglo de la base desconocida** (nunca
-  probado con el cliente real; solo con tests): tras `/ldg wipe confirm`
-  y tras una instalación nueva a mitad de nivel, que el TRACE
-  `TIME_PLAYED_MSG ... seeded the played-time baseline` salga una vez y
-  que el primer nivel cerrado tenga un `totalPlayed` cercano al tiempo
-  entre dings (no al total del personaje); que un nivel que cierra antes
-  de la respuesta salga con `time=unknown` en `/ldg dump` y como `[??]`
-  en `/ldg check`. Y la estimación por `GetTime()` (nunca probada en el
-  cliente real): que un nivel cerrado bastante después de la última
-  respuesta dé un `totalPlayed` cercano al tiempo entre dings (el TRACE
-  `LevelClose` muestra `estimated total=... [cached=..., received Ns
-  ago]`), y que con `/ldg probe` se pueda contrastar qué reloj es
-  `GetTime()` (ver "Estimación entre respuestas").
+- Tras un logout/desconexión sin pasar por reset, la sesión sigue abierta
+  al próximo login y se le sigue añadiendo eventos y muestras. Sigue sin
+  decidir si al reabrir tras un hueco largo conviene abrir una sesión
+  nueva en vez de continuar la vieja.
 - El sobrante de un cruce de nivel hereda el `src` del evento original
   (`EmitCrossingEvent` usa `paired.src` en las dos mitades): un sobrante
   `explore` en `off=0` del nivel nuevo solo puede venir de que el evento
@@ -1693,17 +1368,10 @@ falta en el `.toc`).
   se pierde (el matcher viejo se descarta entero con ella dentro).
   Ventana real menor que `Ledger.MAX_MATCH_GAP` (1s); ya existía con el
   mecanismo anterior, no es una regresión de este cambio.
-- **Verificar en el juego `totalPlayed` vía `TIME_PLAYED_MSG`** (ver
-  "`totalPlayed` de un nivel" arriba, recién cableado): que
-  `lastKnownTotalTimePlayed` se actualice con cada respuesta, que
-  `levelStartTotalPlayed` snapshotee en el momento correcto tanto en
-  frío como en cada cierre, y que el `totalPlayed` resultante de un
-  nivel real coincida con lo esperado (sin depender de la suma de
-  buckets, que ahora es una métrica aparte).
-- **Verificar en el juego `reached` y `deaths`** (nuevos, sin probar con
-  datos reales): que `reached` capture el instante del ding real (no
-  solo el de arranque en frío) y que `deaths` cuente cada
-  `PLAYER_DEAD` del nivel, separado del bucket de tiempo `dead`.
+- **Verificar en el juego `reached` y `deaths`** (sin probar con datos
+  reales): que `reached` capture el instante del ding real (no solo el de
+  arranque en frío) y que `deaths` cuente cada `PLAYER_DEAD` del nivel,
+  separado del contador de actividad `dead`.
 - Ver visualmente en el juego el resultado final de la barra de
   composición de xp ya con color de verdad (localización del frame y
   pintado con `WHITE8x8`/`SetVertexColor` confirmados en el juego, pero
@@ -1719,40 +1387,21 @@ falta en el `.toc`).
   ha confirmado que no hace falta trasladarlo — el segmento gris solo lo
   usa la barra del nivel EN CURSO, nunca una entrada de `levels` ya
   cerrada.
-- **Verificar en el juego el muestreo crudo de estado, rediseñado
-  2026-09-18** (nunca probado con datos reales): que
-  `UnitAffectingCombat`/`GetUnitSpeed`/`UnitIsDeadOrGhost`/`UnitOnTaxi`
-  se comporten como se asume en `ui/xp_capture.lua: SampleTimeState` en
-  ambos clientes (`/ldg probe` ya los incluye, ver "Diagnóstico de
-  compatibilidad"); que `Ledger.ComputeBucketsFromState` clasifique bien
-  en vivo (el hueco corto tras combate sigue contando `"active"`, un
-  movimiento sostenido pasa a `"travel"` solo tras
-  `Ledger.SUSTAINED_MOVEMENT_SECONDS`, la muerte gana siempre); que la
-  serie guardada en `session.stateSeries` tenga combinaciones de bits
-  (no solo 0/1/2: en un análisis del SavedVariables solo aparecían esos
-  tres valores, lo que casaba con una build anterior al muestreo crudo
-  — descartar tras redesplegar), y que un nivel recién cerrado no lleve
-  `stateSeries` y sí `thresholds`.
-- **Muestreo crudo, comprobado sobre exports reales (2026-09-19)**: el
-  refactor a estado crudo está completo y el bit de combate SÍ se escribe.
-  Un personaje con 51 kills en su sesión tiene `{0: 739, 1: 510, 2: 1366}`
-  muestras; otro `{0: 664, 1: 191, 2: 129}`; los buckets `active` de los
-  niveles cerrados (796s, 110s) solo pueden salir de muestras con el bit
-  de combate. Un nivel en curso con solo `{0, 2}` no es un fallo: su único
-  evento (`off=0`, `src=kill`) es el sobrante del cruce de nivel
-  (`newPart`) grabado en la sesión nueva, la pelea de ese kill ocurrió en
-  la sesión ANTERIOR, y en esos 871s no hubo combate. **Observación sin
-  explicar del todo**: en ~700 muestras de combate no aparece nunca el
-  valor 3 (combate + movimiento), cuando en la práctica se pelea
-  moviéndose; coincide con que `GetUnitSpeed` sea "secret" (y por tanto
-  `IsPlayerMoving` degrade a `false`) precisamente en combate. No afecta a
-  los buckets (en `ComputeBucketsFromState` el combate gana al
-  movimiento), pero conviene confirmarlo mirando `/ldg log show` en busca
-  del ERROR único por sesión de `GetUnitSpeed`.
-- Ver visualmente en el juego la barra de reparto de tiempo (nunca
-  probada): anclaje 2px por encima de la barra de xp, el orden fijo
-  active/downtime/travel/dead, los colores (incluidos los que reutilizan
-  `kill`/`unknown`), el borde, y su tooltip.
+- **Verificar en el juego el muestreador de actividad** (reescrito
+  2026-09-19, sin probar con el cliente real; sí con un cliente simulado
+  que carga el `.toc` completo): que `UnitAffectingCombat`/`GetUnitSpeed`/
+  `UnitIsDeadOrGhost`/`UnitOnTaxi` se comporten como se asume en
+  `ui/xp_capture.lua: SampleTimeState` en ambos clientes (`/ldg probe` ya
+  los incluye); que los contadores de `LedgerCharDB.levelTicks` y de la
+  sesión suban de uno en uno y `total` sea siempre su suma; que un nivel
+  cerrado lleve `entry.ticks` y el siguiente arranque en cero; y que una
+  `SavedVariables` de una versión anterior se borre con el aviso del
+  login, sin errores.
+- Ver visualmente en el juego la barra de actividad (nunca probada):
+  anclaje 2px por encima de la barra de xp, el orden fijo
+  combat/non-combat/travel/dead, los colores (incluidos los que reutilizan
+  `kill`/`unknown`), el borde, y su tooltip (solo porcentajes, nivel y
+  sesión).
 - Verificar en el juego el panel de exportación (`/ldg export`, ver
   "Exportación de datos" arriba, nunca probado): que `UISpecialFrames`
   cierre el panel con Escape, que `editBox:HighlightText()` deje el

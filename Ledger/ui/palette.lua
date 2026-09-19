@@ -20,16 +20,16 @@ Ledger.PALETTE = {
     unknown   = { 0x6E/255, 0x6A/255, 0x66/255 }, -- #6E6A66, warm gray
     _fallback = { 0xCC/255, 0x33/255, 0x99/255 }, -- #CC3399, loud magenta: unrecognized src/bucket, should never actually show up
 
-    -- Time bar, by bucket. travel and dead are their own entries.
+    -- Time bar, by activity. travel and dead are their own entries.
     travel = { 0x4A/255, 0x6F/255, 0xA5/255 }, -- #4A6FA5, muted blue
     dead   = { 0x8B/255, 0x3A/255, 0x3A/255 }, -- #8B3A3A, muted dark red
 }
 
--- active and downtime REUSE kill/unknown's color (same concept:
+-- combat and nonCombat REUSE kill/unknown's color (same concept:
 -- productive time / "we don't know"), not a copy of the same hex: if
 -- kill or unknown ever change, these follow automatically.
-Ledger.PALETTE.active   = Ledger.PALETTE.kill
-Ledger.PALETTE.downtime = Ledger.PALETTE.unknown
+Ledger.PALETTE.combat    = Ledger.PALETTE.kill
+Ledger.PALETTE.nonCombat = Ledger.PALETTE.unknown
 
 -- The xp bar's initial segment ("xp earned before tracking started")
 -- is, in essence, "we don't know": same gray as unknown.

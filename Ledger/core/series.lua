@@ -27,13 +27,9 @@ Ledger.SERIES = {
     -- the text name.
     -- future: gold (stride 3), rep (stride 4, with a faction field),
     --         loot (stride 3).
-    state = { key = "stateSeries", stride = 1, fields = { "flags" } },
-    -- state: one packed integer per second (Ledger.PackStateFlags/
-    -- UnpackStateFlags, core/time_buckets.lua) with the raw combat/
-    -- moving/dead/taxi flags sampled that second. Unlike the xp series
-    -- there's no explicit offset field: index i (1-based) IS second
-    -- i-1 since the owning session started sampling, the array
-    -- position already encodes the time.
+    -- There is deliberately no series for the per-second activity
+    -- sample: it is never stored as a series, only as running counters
+    -- (core/ticks.lua).
 }
 
 -- Numeric enum for the xp series' src field. Adding a new source is

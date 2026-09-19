@@ -1,22 +1,25 @@
 -- Ledger - ui/xp_capture.lua
 -- Translates WoW events related to gaining xp, dying/resurrecting and
 -- played time into core/ calls. Thin layer: all the logic for pairing
--- amount+source, accumulating time buckets and composing the session
--- lives in core/; this file only reads WoW APIs and calls into it.
+-- amount+source, classifying the activity samples and composing the
+-- session lives in core/; this file only reads WoW APIs and calls into
+-- it.
 
 local ADDON_NAME, Ledger = ...
 
--- RequestTimePlayed is not essential (totalPlayed simply stays at its
--- last known value if it never updates) and its presence across
--- client builds is exactly the kind of thing /ldg probe exists to
+-- RequestTimePlayed only feeds an INFORMATIONAL reading (the /played
+-- line in /ldg check: nothing is calculated from it), and its presence
+-- across client builds is exactly the kind of thing /ldg probe exists to
 -- check -- so it's never called bare: a build where it's missing or
--- errors just skips the refresh instead of breaking the handler that
--- called this.
+-- errors just skips the reading instead of breaking the handler that
+-- called this. Exposed so /ldg check can ask for a fresh reading when
+-- its window opens.
 local function SafeRequestTimePlayed()
     if type(RequestTimePlayed) == "function" then
         pcall(RequestTimePlayed)
     end
 end
+Ledger.RequestPlayedReading = SafeRequestTimePlayed
 
 ----------------------------------------------------------------------
 -- Combat xp patterns, built at load time from ALL of the client's real
@@ -109,9 +112,9 @@ local function HandleCombatXPGainMessage(msg, t)
 end
 
 ----------------------------------------------------------------------
--- State: all sessions of the current level (the last one is active),
--- the time-bucket tracker and the buffer that pairs amount
--- (PLAYER_XP_UPDATE) with source (combat message).
+-- State: all sessions of the current level (the last one is active)
+-- and the buffer that pairs amount (PLAYER_XP_UPDATE) with source
+-- (combat message).
 --
 -- `sessions` is not an in-memory copy: it IS the same table as
 -- LedgerCharDB.sessions (assigned by reference in StartTracking), so
@@ -164,21 +167,11 @@ end
 -- directly: that event today is only diagnostic and refreshes the
 -- panel, see the dispatcher.
 --
--- totalPlayed comes from subtracting LedgerCharDB.levelStartTotalPlayed
--- (the CHARACTER's total played time according to TIME_PLAYED_MSG, at
--- the instant the current level started being tracked) from the last
--- known total: self-correcting against lost sessions, because that
--- total is computed by the server and is always exact. The cached total
--- is only refreshed when TIME_PLAYED_MSG answers, so it's never read
--- raw: Ledger.LevelPlayedTime extrapolates it to `t` (the GetTime() of
--- the ding itself: the xp event that crosses it) with the time elapsed
--- since it was received. If either piece is still unknown (nil: see
--- core/played_baseline.lua) totalPlayed is nil and the entry is flagged
--- timeUnreliable -- never a made-up number. Activity buckets
--- (active/downtime/travel/dead) are a separate metric -- how that time
--- is split, not how much it is -- and get DERIVED from the level's raw
--- per-second state samples by Ledger.CloseLevel
--- (Ledger.ComputeBucketsFromState), never accumulated live here.
+-- Time takes no calculation here: the level's activity counters were
+-- incremented live by the sampler (SampleTimeState) on
+-- LedgerCharDB.levelTicks, and they simply become the entry's `ticks`
+-- as they are -- no aggregation, no recalculation. The next level then
+-- starts with a fresh set.
 --
 -- xpRequired is the closed level's own xp requirement (the crossing's
 -- oldMax), recorded on the entry so /ldg check can verify the level's
@@ -186,47 +179,17 @@ end
 local function CloseCurrentLevel(t, xpRequired)
     if not sessions or #sessions == 0 then return end
 
-    local totalPlayed = Ledger.LevelPlayedTime(LedgerCharDB, Ledger.playedClock, t)
-
-    local entry = Ledger.CloseLevel(sessions, totalPlayed, LedgerDB.includeRested, nil, xpRequired)
+    local entry = Ledger.CloseLevel(sessions, LedgerDB.includeRested, xpRequired, LedgerCharDB.levelTicks)
     Ledger.RecordLevelClose(LedgerCharDB, entry)
-
-    -- Cross-check the played time just recorded against two independent
-    -- measurements (core/level_time.lua): never more than the time
-    -- since this level's ding, never less than what the per-second
-    -- sampler measured in game, and coherent with the xp curve's length.
-    -- The entry is kept as computed -- a violation is reported, not
-    -- silently "fixed" -- and /ldg check will show it again afterward.
-    local sinceDing = (entry.reached or 0) > 0 and (time() - entry.reached) or nil
-    for _, violation in ipairs(Ledger.LevelTimeViolations(entry, sinceDing)) do
-        Ledger.Log("error", string.format(
-            "LevelClose invariant violated (level %d, %s): %s", entry.level, violation.id, violation.text))
-    end
-
     Ledger.Log("trace", string.format(
-        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, totalPlayed=%s (estimated total=%s [cached=%s, received %s ago] - levelStart=%s)%s, deaths=%d",
-        entry.level, #sessions, entry.totalXP,
-        totalPlayed and (totalPlayed .. "s") or "unknown",
-        tostring(Ledger.EstimatePlayedTotal(LedgerCharDB, Ledger.playedClock, t)),
-        tostring(LedgerCharDB.lastKnownTotalTimePlayed),
-        Ledger.playedClock.receivedAt and string.format("%.1fs", t - Ledger.playedClock.receivedAt) or "never",
-        tostring(LedgerCharDB.levelStartTotalPlayed),
-        entry.timeUnreliable and " -- played-time baseline unknown, entry flagged timeUnreliable" or "",
-        entry.deaths))
+        "LevelClose: closed level %d, %d session(s) aggregated, totalXP=%d, samples=%d, deaths=%d",
+        entry.level, #sessions, entry.totalXP, entry.ticks.total, entry.deaths))
 
+    LedgerCharDB.levelTicks = Ledger.NewTicks()
     LedgerCharDB.sessions = {}
     sessions = LedgerCharDB.sessions
     local newSession = OpenSession(t, UnitLevel("player"), false)
     newSession.reached = time()
-
-    -- Snapshot of the character's total played time for the next
-    -- close, and a fresh request so it updates as soon as possible
-    -- (TIME_PLAYED_MSG arrives asynchronously: see the dispatcher).
-    Ledger.AdvancePlayedBaseline(LedgerCharDB, Ledger.playedClock, t)
-    Ledger.Log("trace", string.format("LevelClose: next level's levelStartTotalPlayed advanced to %s%s",
-        tostring(LedgerCharDB.levelStartTotalPlayed),
-        Ledger.playedClock.awaiting and " (unknown: awaiting TIME_PLAYED_MSG)" or ""))
-    SafeRequestTimePlayed()
 
     matcher    = Ledger.NewMatcher()
     reconciler = Ledger.NewReconciler()
@@ -309,19 +272,13 @@ end
 -- already had on this level before the addon started tracking, UnitXP
 -- at this instant) and `reached` (approximate: the instant tracking
 -- started, not the real ding -- that already happened before installing
--- the addon, just as inexact as initialXP) -- and starts the
--- played-time baseline for this level as UNKNOWN, awaiting the
--- TIME_PLAYED_MSG that whoever called us asks for right after (see
--- core/played_baseline.lua and CloseCurrentLevel). Never 0: that made
--- the first level closed after a fresh install or a wipe record the
--- character's whole played time.
+-- the addon, just as inexact as initialXP).
 local function StartTracking(t, level)
     sessions = LedgerCharDB.sessions
     if #sessions == 0 then
         local session = OpenSession(t, level, false)
         session.initialXP = UnitXP("player")
         session.reached   = time()
-        Ledger.StartPlayedBaseline(LedgerCharDB, Ledger.playedClock)
     else
         local lastOffset = Ledger.LastOffset(CurrentSession()) or 0
         sessionStartRef = t - (lastOffset / 10)
@@ -331,19 +288,17 @@ local function StartTracking(t, level)
 end
 
 -- Completely wipes LedgerCharDB (all of this character's saved
--- sessions and levels) and starts tracking from scratch, without
--- needing a /reload: empties sessions/levels, rebinds `sessions` to the
--- new table (StartTracking) and opens the current level's first
--- session with initialXP = current xp (same as a brand-new character).
--- Also resets matcher/tracker/reconciler (via StartTracking) and the
--- previousXP/previousMaxXP/previousLevel reference so the first
--- PLAYER_XP_UPDATE after the wipe doesn't compute a fake delta. The
--- played-time baseline is left unknown and seeded by the
--- TIME_PLAYED_MSG that SafeRequestTimePlayed() below asks for (a wipe
--- doesn't reset the character's played time, only Ledger's records).
--- Irreversible action: meant for /ldg wipe confirm.
+-- sessions, levels and activity counters) and starts tracking from
+-- scratch, without needing a /reload: a fresh LedgerCharDB replaces the
+-- old one, `sessions` is rebound to its new table (StartTracking) and the
+-- current level's first session opens with initialXP = current xp (same
+-- as a brand-new character). Also resets matcher/reconciler (via
+-- StartTracking) and the previousXP/previousMaxXP/previousLevel
+-- reference so the first PLAYER_XP_UPDATE after the wipe doesn't
+-- compute a fake delta. Irreversible action: meant for /ldg wipe
+-- confirm.
 function Ledger.WipeCharacterData(t)
-    Ledger.WipeCharDB(LedgerCharDB, Ledger.playedClock)
+    LedgerCharDB = Ledger.InitCharDB(nil)
     sessions = nil
     StartTracking(t, UnitLevel("player"))
     previousXP    = UnitXP("player")
@@ -355,12 +310,10 @@ end
 
 -- Closes the active session (tEnd) and opens a new one marked as
 -- manual. Closes, never deletes: the closed session stays in `sessions`
--- until the level closes. The new session starts its own empty raw
--- state series (Ledger.SERIES.state): each session's slice of that
--- series gets concatenated with the rest of the level's on close
--- (core/level_close.lua), and buckets are derived from the
--- concatenation, never accumulated live per session. tEnd is stored as
--- absolute time(), same as t0 (see OpenSession).
+-- until the level closes. The new session starts its own set of
+-- activity counters (session.ticks), while the level's counters
+-- (LedgerCharDB.levelTicks) just keep counting across the reset. tEnd
+-- is stored as absolute time(), same as t0 (see OpenSession).
 function Ledger.ResetSession(t)
     local current = CurrentSession()
     if not current then return end
@@ -387,18 +340,15 @@ end
 C_Timer.NewTicker(1, FlushMatcher)
 
 ----------------------------------------------------------------------
--- 1s raw state sampler: instead of deciding a bucket live, this just
--- records the instant's raw combat/movement/dead/taxi flags (packed
--- into a single integer, Ledger.PackStateFlags) as one more record in
--- the current session's state series (Ledger.SERIES.state). Bucket
--- membership is decided later, purely from this raw data
--- (core/time_buckets.lua: Ledger.ComputeBucketsFromState), both when a
--- level closes (core/level_close.lua) and live for the on-screen bar
--- (ui/time_bar.lua) -- the raw sample is what's actually persisted (for
--- the level in progress only: it's discarded once the level closes).
--- Also refreshes session.tEnd every tick, so the active session always
--- carries a persisted "last seen alive" time -- the denominator of its
--- xp/hour (core/rate.lua) when read back from saved/exported data.
+-- 1s activity sampler. The ticker is a SAMPLER, not a clock: each second
+-- it reads the player's instantaneous state, Ledger.ClassifyActivity
+-- (core/ticks.lua) turns it into exactly one activity, and that
+-- activity's counter goes up by one -- live, on the active session's
+-- counters AND on the level in progress's (LedgerCharDB.levelTicks), so
+-- a crash loses at most the ticks since the last save, never a level.
+-- Nothing is stored per tick and nothing is derived later. The counters
+-- are counts of samples, not guaranteed seconds: with the client not
+-- running the ticker doesn't run either, which is correct by design.
 ----------------------------------------------------------------------
 
 -- Some clients (confirmed 2026-09-18 on the WoW Forever beta) taint
@@ -408,8 +358,8 @@ C_Timer.NewTicker(1, FlushMatcher)
 -- isn't caught by wrapping just the call in pcall, the comparison
 -- itself needs its own pcall. Degrades to "not moving" and warns once
 -- per session at ERROR (not the xp bar's INFO-level degraded anchor:
--- this isn't a supported fallback, it means the "travel" time bucket
--- can't be detected at all in this client -- see CLAUDE.md Pendiente).
+-- this isn't a supported fallback, it means movement -- hence "travel"
+-- -- can't be detected at all in this client -- see CLAUDE.md Pendiente).
 local warnedSecretSpeed = false
 local function IsPlayerMoving()
     local ok, speed = pcall(GetUnitSpeed, "player")
@@ -420,7 +370,7 @@ local function IsPlayerMoving()
         if not warnedSecretSpeed then
             Ledger.Log("error",
                 "GetUnitSpeed(\"player\") returned a secret value this client won't let us compare (" ..
-                tostring(moving) .. ") -- movement-based 'travel' bucket detection is disabled for this session.")
+                tostring(moving) .. ") -- movement-based 'travel' detection is disabled for this session.")
             warnedSecretSpeed = true
         end
         return false
@@ -432,14 +382,12 @@ local function SampleTimeState()
     local session = CurrentSession()
     if not session then return end
 
-    local packed = Ledger.PackStateFlags({
+    Ledger.RecordActivityTick(session, LedgerCharDB.levelTicks, {
+        dead   = UnitIsDeadOrGhost("player"),
         combat = UnitAffectingCombat("player"),
         moving = IsPlayerMoving(),
-        dead   = UnitIsDeadOrGhost("player"),
         taxi   = UnitOnTaxi("player"),
     })
-    Ledger.AppendRecord(session, Ledger.SERIES.state, packed)
-    session.tEnd = time()
     Ledger.RedrawTimeBar()
 end
 
@@ -557,10 +505,10 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         Ledger.UpdateXP()
 
     elseif event == "PLAYER_DEAD" then
-        -- Level death counter, separate from the "dead" time bucket
+        -- Level death counter, separate from the "dead" activity counter
         -- (sampled independently every second via UnitIsDeadOrGhost,
-        -- see SampleTimeState): how long you were dead doesn't say how
-        -- many times. See core/level_close.lua, entry.deaths.
+        -- see SampleTimeState): how many samples you were dead doesn't
+        -- say how many times. See core/level_close.lua, entry.deaths.
         local session = CurrentSession()
         if session then
             session.deaths = (session.deaths or 0) + 1
@@ -568,19 +516,13 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
 
     elseif event == "TIME_PLAYED_MSG" then
         -- arg1 = the CHARACTER's total played time, arg2 = time played
-        -- on the current level (according to the client itself; not
-        -- used because it knows nothing about how this addon splits
-        -- levels). arg1 is the baseline for totalPlayed: see
-        -- CloseCurrentLevel, which subtracts
-        -- LedgerCharDB.levelStartTotalPlayed from this value. t (this
-        -- event's GetTime()) is recorded as the moment it was received,
-        -- in memory only, so the total can be extrapolated between
-        -- replies (Ledger.EstimatePlayedTotal). If the baseline was
-        -- waiting for its first reading (fresh install, wipe, level just
-        -- closed with no total yet), this is it.
-        if Ledger.ApplyTimePlayed(LedgerCharDB, Ledger.playedClock, arg1, t) then
-            Ledger.Log("trace", string.format(
-                "TIME_PLAYED_MSG t=%.3f seeded the played-time baseline: levelStartTotalPlayed=%s", t, tostring(arg1)))
+        -- on the current level. INFORMATIONAL ONLY: arg2 is kept in its
+        -- own field (LedgerCharDB.played, together with how many
+        -- samples the level had at that moment) and takes part in no
+        -- calculation and no metric -- the only reader is /ldg check.
+        Ledger.RecordPlayedReading(LedgerCharDB, UnitLevel("player"), arg2)
+        if Ledger.checkFrame and Ledger.checkFrame:IsShown() then
+            Ledger.RenderCheckFrame()
         end
     end
 end)

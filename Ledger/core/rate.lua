@@ -1,29 +1,34 @@
 -- Ledger - core/rate.lua
 -- XP/hour rate math and the rate panel's content (headline number +
--- hover panel sections). Pure logic: does not use any WoW API, time
--- is always received as a parameter (elapsed seconds, never GetTime()
--- or time()).
+-- hover panel sections). Pure logic: does not use any WoW API.
+--
+-- The denominator is the number of activity SAMPLES (core/ticks.lua:
+-- the ticker's total for a session or for the level), each one counted
+-- as one second -- never the wall clock nor the game's /played, so it is
+-- "xp per hour of time the addon actually observed" (time with the
+-- client not running is not in it, by design). Samples are received as
+-- a parameter.
 
 local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/rate.lua")
 
--- Below this many seconds of elapsed time, an xp/hour rate is too
--- noisy to show as a number: a small denominator makes it spike
--- wildly (e.g. 50 xp in 5s reads as 36000 xp/h). Ledger.ComputeXPRate
--- returns nil below this threshold; callers show a dash instead.
-Ledger.RATE_MIN_SECONDS = 60
+-- Below this many samples, an xp/hour rate is too noisy to show as a
+-- number: a small denominator makes it spike wildly (e.g. 50 xp in 5
+-- samples reads as 36000 xp/h). Ledger.ComputeXPRate returns nil below
+-- this threshold; callers show a dash instead.
+Ledger.RATE_MIN_SAMPLES = 60
 
--- xp/hour = xp * 3600 / elapsedSeconds. Returns nil (never a
--- distorted number) if elapsedSeconds is missing, non-positive, or
--- below Ledger.RATE_MIN_SECONDS. xp = 0 with enough elapsed time is a
--- valid, real rate of 0, not nil: only the denominator being too
--- small triggers the dash, never a small or zero numerator.
-function Ledger.ComputeXPRate(xp, elapsedSeconds)
-    if not xp or not elapsedSeconds or elapsedSeconds < Ledger.RATE_MIN_SECONDS then
+-- xp/hour = xp * 3600 / samples (one sample = one second). Returns nil
+-- (never a distorted number) if samples is missing, non-positive, or
+-- below Ledger.RATE_MIN_SAMPLES. xp = 0 with enough samples is a valid,
+-- real rate of 0, not nil: only the denominator being too small
+-- triggers the dash, never a small or zero numerator.
+function Ledger.ComputeXPRate(xp, samples)
+    if not xp or not samples or samples < Ledger.RATE_MIN_SAMPLES then
         return nil
     end
-    return xp / elapsedSeconds * 3600
+    return xp / samples * 3600
 end
 
 -- Classic left-to-right thousands-separator idiom: repeatedly inserts
@@ -42,7 +47,7 @@ end
 
 -- Formats an xp/hour rate for display: a thousands-separated integer
 -- with the "xp/h" suffix, or "-" if rate is nil (see
--- Ledger.ComputeXPRate -- not enough elapsed time to be meaningful).
+-- Ledger.ComputeXPRate -- not enough samples to be meaningful).
 function Ledger.FormatXPRate(rate)
     if not rate then
         return "-"
@@ -55,25 +60,21 @@ end
 -- pre-summed numbers the caller derived): session is the active
 -- session alone (its own xp/hour); levelSessions is every session of
 -- the current level, active one included, same set the xp composition
--- bar sums (core/events.lua: XPBySourceAcrossSessions). sessionElapsed/
--- levelElapsed are seconds, received as parameters since core/ never
--- touches the clock -- levelElapsed is expected to be the character's
--- actual played time on this level so far (Ledger.LevelPlayedTime,
--- core/played_baseline.lua: the same self-correcting, time-extrapolated
--- source core/level_close.lua's totalPlayed uses), not a sum of session
--- timestamps. It's nil when that time isn't known (baseline still
--- unknown): the level rate is then nil too, shown as "-". includeRested is forwarded to
+-- bar sums (core/events.lua: XPBySourceAcrossSessions). sessionSamples/
+-- levelSamples are the total activity samples of the active session and
+-- of the level in progress (session.ticks.total / levelTicks.total,
+-- core/ticks.lua). includeRested is forwarded to
 -- Ledger.TotalXP/TotalXPAcrossSessions for both numbers: same toggle,
 -- same meaning, for the session's own rate and the level's.
 -- Returns { sessionRate=, levelRate= }, each a number or nil (see
 -- Ledger.ComputeXPRate).
-function Ledger.ComputeHeadlineRates(session, levelSessions, sessionElapsed, levelElapsed, includeRested)
+function Ledger.ComputeHeadlineRates(session, levelSessions, sessionSamples, levelSamples, includeRested)
     local sessionXP = session and Ledger.TotalXP(session, includeRested) or 0
     local levelXP    = Ledger.TotalXPAcrossSessions(levelSessions or {}, includeRested)
 
     return {
-        sessionRate = Ledger.ComputeXPRate(sessionXP, sessionElapsed),
-        levelRate   = Ledger.ComputeXPRate(levelXP, levelElapsed),
+        sessionRate = Ledger.ComputeXPRate(sessionXP, sessionSamples),
+        levelRate   = Ledger.ComputeXPRate(levelXP, levelSamples),
     }
 end
 

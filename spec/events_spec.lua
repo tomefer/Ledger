@@ -4,7 +4,7 @@ describe("core/events.lua", function()
     before_each(function()
         Ledger = {}
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
-        assert(loadfile("Ledger/core/time_buckets.lua"))("Ledger", Ledger) -- Ledger.NewEmptyBuckets
+        assert(loadfile("Ledger/core/ticks.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/events.lua"))("Ledger", Ledger)
     end)
 

@@ -22,26 +22,18 @@ local PROBE_API_TAKES_PLAYER = {
     GetUnitSpeed       = true,
     UnitAffectingCombat = true,
     UnitIsDeadOrGhost  = true,
-    GetTime            = false,
 }
 
 -- Fixed order (never derived from pairs(), which has no stable order
 -- in Lua), so /ldg probe's output is deterministic run to run.
 -- UnitOnTaxi/GetUnitSpeed/UnitAffectingCombat/UnitIsDeadOrGhost feed the
--- real per-second time-state sampler now (ui/xp_capture.lua:
--- SampleTimeState, see core/time_buckets.lua), not just a
+-- real per-second activity sampler (ui/xp_capture.lua:
+-- SampleTimeState, see core/ticks.lua), not just a
 -- forward-looking curiosity -- worth checking here on every client this
--- addon ships to. GetTime is here for a different reason: the played-time
--- estimate (core/played_baseline.lua) extrapolates with it, and its exact
--- semantics can't be verified outside the client -- run /ldg probe,
--- restart the client, run it again: if the value keeps rising across the
--- restart it's the system uptime (advances with the client closed), if it
--- starts small again it's client-relative. The addon never compares a
--- GetTime() from one run with another either way.
+-- addon ships to.
 local PROBE_API_ORDER = {
     "UnitXP", "UnitXPMax", "GetXPExhaustion", "RequestTimePlayed",
     "UnitOnTaxi", "GetUnitSpeed", "UnitAffectingCombat", "UnitIsDeadOrGhost",
-    "GetTime",
 }
 
 -- Calls the global function `name` (if it exists) and captures up to

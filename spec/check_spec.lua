@@ -4,9 +4,8 @@ describe("core/check.lua", function()
     before_each(function()
         Ledger = {}
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
+        assert(loadfile("Ledger/core/ticks.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/events.lua"))("Ledger", Ledger)
-        assert(loadfile("Ledger/core/time_bar.lua"))("Ledger", Ledger) -- Ledger.FormatHHMMSS
-        assert(loadfile("Ledger/core/level_time.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/check.lua"))("Ledger", Ledger)
     end)
 
@@ -29,7 +28,6 @@ describe("core/check.lua", function()
             reached     = opts.reached or 0,
             initialXP   = opts.initialXP or 0,
             xpRequired  = opts.xpRequired,
-            totalPlayed = opts.totalPlayed or 0,
             bySource    = { kill = recorded },
         }
     end
@@ -102,7 +100,7 @@ describe("core/check.lua", function()
     end)
 
     describe("no closed levels", function()
-        it("says so in both closed-level sections and stays OK", function()
+        it("says so in the closed-levels section and stays OK", function()
             local charDB = { sessions = { SessionWith(3, { 10 }) }, levels = {} }
             local result = Ledger.BuildCheck(charDB, { level = 3, xp = 10 })
 
@@ -111,7 +109,7 @@ describe("core/check.lua", function()
             for _, line in ipairs(result.lines) do
                 if line.text == "(no closed levels yet)" then count = count + 1 end
             end
-            assert.are.equal(2, count)
+            assert.are.equal(1, count)
         end)
 
         it("copes with no active session at all", function()
@@ -270,134 +268,87 @@ describe("core/check.lua", function()
         end)
     end)
 
-    describe("closed levels: played time vs time between dings", function()
-        -- levels 10 and 11 closed, 12 in progress; dings at t=1000/2200/3400.
-        local function Setup(played10, played11)
+    describe("time section: information only, never a discrepancy", function()
+        local function CharDB(opts)
+            opts = opts or {}
+            local session = SessionWith(12, { 100 })
+            session.ticks = opts.sessionTicks or { combat = 2, nonCombat = 6, travel = 2, dead = 0, total = 10 }
             return {
-                sessions = { SessionWith(12, { 10 }, nil, 3400) },
-                levels = {
-                    [10] = ClosedLevel(10, 100, { xpRequired = 100, reached = 1000, totalPlayed = played10 }),
-                    [11] = ClosedLevel(11, 100, { xpRequired = 100, reached = 2200, totalPlayed = played11 }),
-                },
+                sessions = { session },
+                levels = {},
+                levelTicks = opts.levelTicks or { combat = 20, nonCombat = 60, travel = 15, dead = 5, total = 100 },
+                played = opts.played,
             }
         end
 
-        it("accepts played <= elapsed (time logged out is not played)", function()
-            local result = Ledger.BuildCheck(Setup(900, 1200), { level = 12, xp = 10 })
+        it("shows the level and session activity as percentages of the samples", function()
+            local result = Ledger.BuildCheck(CharDB(), { level = 12, xp = 100 })
 
-            assert.are.equal(0, result.discrepancies)
-            -- level 10: 1200s between dings, 900 played -> 300 not played
             assert.is_not_nil(Find(result,
-                "Level 10: played 00:15:00, 00:20:00 between dings (00:05:00 of that not played: logged out)", "ok"))
-            -- level 11 uses the in-progress level's session for its next ding
-            assert.is_not_nil(Find(result, "Level 11: played 00:20:00, 00:20:00 between dings", "ok"))
+                "Level activity, % of samples: Combat 20.0% | Non-combat 60.0% | Travel 15.0% | Dead 5.0%", "info"))
+            assert.is_not_nil(Find(result,
+                "Session activity, % of samples: Combat 20.0% | Non-combat 60.0% | Travel 20.0% | Dead 0.0%", "info"))
         end)
 
-        it("shows a level with no reliable time as skipped, never as a discrepancy", function()
-            local charDB = Setup(900, 1200)
-            charDB.levels[10].totalPlayed = nil
-            charDB.levels[10].timeUnreliable = true
-            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
+        it("without any samples it says so", function()
+            local result = Ledger.BuildCheck(CharDB({ levelTicks = Ledger.NewTicks() }), { level = 12, xp = 100 })
 
+            assert.is_not_nil(Find(result, "Level activity, % of samples: no samples yet", "info"))
+        end)
+
+        it("shows the /played reading next to the samples at that moment, with their difference", function()
+            local result = Ledger.BuildCheck(
+                CharDB({ played = { level = 12, seconds = 2472, samples = 2450 } }), { level = 12, xp = 100 })
+
+            assert.is_not_nil(Find(result, "/played, this level: 2472s played vs 2450 samples at that moment, difference +22", "info"))
+            assert.is_not_nil(Find(result, "information, not an error"))
+        end)
+
+        it("a difference in either direction is only ever information, never a discrepancy", function()
+            for _, played in ipairs({
+                { level = 12, seconds = 100,   samples = 5000 },
+                { level = 12, seconds = 90000, samples = 10 },
+            }) do
+                local result = Ledger.BuildCheck(CharDB({ played = played }), { level = 12, xp = 100 })
+
+                assert.are.equal(0, result.discrepancies)
+                assert.are.equal("Ledger check: ALL OK", result.lines[1].text)
+                assert.are.equal(0, CountStatus(result, "bad"))
+            end
+        end)
+
+        it("says so when there is no /played reading yet", function()
+            local result = Ledger.BuildCheck(CharDB(), { level = 12, xp = 100 })
+
+            assert.is_not_nil(Find(result, "/played: no reading yet", "info"))
+        end)
+
+        it("says so when the reading is from another level", function()
+            local result = Ledger.BuildCheck(
+                CharDB({ played = { level = 11, seconds = 500, samples = 480 } }), { level = 12, xp = 100 })
+
+            assert.is_not_nil(Find(result, "/played: last reading is from level 11, the player is now level 12", "info"))
             assert.are.equal(0, result.discrepancies)
-            local line = Find(result, "Level 10: no reliable played-time data", "skip")
-            assert.is_not_nil(line)
-            assert.is_not_nil(line.text:find("not an addon error", 1, true))
-            -- the other level is still checked normally
-            assert.is_not_nil(Find(result, "Level 11: played 00:20:00", "ok"))
         end)
 
-        it("skips (does not crash on) a missing totalPlayed even without the flag", function()
-            local charDB = Setup(900, 1200)
-            charDB.levels[11].totalPlayed = nil
-            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
+        it("copes with data that has no counters at all", function()
+            local result = Ledger.BuildCheck({ sessions = {}, levels = {} }, { level = 3, xp = 0 })
 
+            assert.is_not_nil(Find(result, "Level activity, % of samples: no samples yet"))
             assert.are.equal(0, result.discrepancies)
-            assert.is_not_nil(Find(result, "Level 11: no reliable played-time data", "skip"))
         end)
 
-        it("flags a level whose played time is below what the sampler measured in game (the false 'logged out' case)", function()
-            -- Real data (export, level 6): played 373s, but the sampler had
-            -- ticked 2391s and the dings are 2405s apart -> the client was
-            -- in game the whole time, it can't have been 'logged out'.
-            local charDB = Setup(373, 1200)
-            charDB.levels[10].buckets = { active = 800, downtime = 200, travel = 1391, dead = 0 }
-            charDB.levels[10].reached, charDB.levels[11].reached = 1000, 3405
-            charDB.sessions[1].reached = 4000
-            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
+        it("has no time invariants: nothing about closed levels' time is checked or shown", function()
+            local charDB = CharDB()
+            charDB.levels[10] = ClosedLevel(10, 100, { xpRequired = 100 })
+            charDB.levels[10].ticks = { combat = 1, nonCombat = 0, travel = 0, dead = 0, total = 1 }
+            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 100 })
+            local text = Ledger.FormatCheck(result)
 
-            assert.is_not_nil(Find(result, "Level 10: played 00:06:13 < 00:39:51 sampled in game", "bad"))
-            assert.is_nil(Find(result, "Level 10: played 00:06:13, 00:40:05 between dings"))
-        end)
-
-        it("flags an xp curve too long for the played time", function()
-            local charDB = Setup(373, 1200)
-            charDB.levels[10].curve = {}
-            for i = 1, 41 do charDB.levels[10].curve[i] = 10 end
-            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
-
-            assert.is_not_nil(Find(result, "Level 10: the xp curve spans 41 minutes but played is only 00:06:13", "bad"))
-        end)
-
-        it("still runs the sample/curve checks when the ding times are unknown", function()
-            local charDB = Setup(373, 1200)
-            charDB.levels[10].reached = 0 -- elapsed can't be computed
-            charDB.levels[10].buckets = { active = 2391 }
-            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
-
-            assert.is_not_nil(Find(result, "Level 10: played 00:06:13 < 00:39:51 sampled in game", "bad"))
-        end)
-
-        it("flags played time that exceeds the time between dings", function()
-            local result = Ledger.BuildCheck(Setup(1500, 1200), { level = 12, xp = 10 })
-
-            assert.are.equal(1, result.discrepancies)
-            local line = Find(result, "Level 10: played 00:25:00 > 00:20:00 between dings", "bad")
-            assert.is_not_nil(line)
-            assert.is_not_nil(line.text:find("misaligned", 1, true))
-        end)
-
-        it("allows the tolerance before flagging", function()
-            local within = Ledger.BuildCheck(Setup(1200 + Ledger.TIME_TOLERANCE, 1200), { level = 12, xp = 10 })
-            local beyond = Ledger.BuildCheck(Setup(1200 + Ledger.TIME_TOLERANCE + 1, 1200), { level = 12, xp = 10 })
-
-            assert.are.equal(0, within.discrepancies)
-            assert.are.equal(1, beyond.discrepancies)
-        end)
-
-        it("flags ding times that are out of order", function()
-            local charDB = Setup(100, 100)
-            charDB.levels[10].reached = 5000 -- after level 11's ding at 2200
-            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
-
-            assert.is_not_nil(Find(result, "ding times are out of order", "bad"))
-        end)
-
-        it("skips a level whose ding times are unknown (reached = 0)", function()
-            local charDB = Setup(100, 100)
-            charDB.levels[10].reached = 0
-            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
-
-            assert.are.equal(0, result.discrepancies)
-            assert.is_not_nil(Find(result, "Level 10: cannot verify", "skip"))
-        end)
-
-        it("skips the last closed level when the level in progress has no reached time", function()
-            local charDB = Setup(100, 100)
-            charDB.sessions[1].reached = nil
-            local result = Ledger.BuildCheck(charDB, { level = 12, xp = 10 })
-
-            assert.is_not_nil(Find(result, "Level 11: cannot verify", "skip"))
-        end)
-
-        it("skips a level whose next level is not tracked (a gap in levels)", function()
-            local charDB = {
-                sessions = { SessionWith(15, { 10 }, nil, 9000) },
-                levels = { [10] = ClosedLevel(10, 100, { xpRequired = 100, reached = 1000, totalPlayed = 100 }) },
-            }
-            local result = Ledger.BuildCheck(charDB, { level = 15, xp = 10 })
-
-            assert.is_not_nil(Find(result, "Level 10: cannot verify", "skip"))
+            assert.is_nil(text:find("between dings", 1, true))
+            assert.is_nil(text:find("totalPlayed", 1, true))
+            assert.is_nil(text:find("logged out", 1, true))
+            assert.is_nil(text:find("sampled in game", 1, true))
         end)
     end)
 

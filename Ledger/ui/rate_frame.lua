@@ -163,14 +163,12 @@ function Ledger.RefreshRateFrame()
     if not frame:IsShown() then return end
 
     local session, levelSessions = CurrentSessionAndLevelSessions()
-    local sessionElapsed = session and (time() - session.t0) or 0
-    -- nil while the played-time baseline or total is unknown: the level
-    -- rate then shows "-" instead of dividing by a made-up number.
-    -- Extrapolated to now, so it keeps growing between TIME_PLAYED_MSG
-    -- replies instead of freezing at the last one.
-    local levelElapsed = Ledger.LevelPlayedTime(LedgerCharDB, Ledger.playedClock, GetTime())
+    -- The denominators are activity SAMPLES (core/ticks.lua), one per
+    -- second the sampler ran: never the wall clock nor /played.
+    local sessionSamples = session and session.ticks and session.ticks.total or 0
+    local levelSamples = LedgerCharDB.levelTicks.total
 
-    lastRates = Ledger.ComputeHeadlineRates(session, levelSessions, sessionElapsed, levelElapsed, LedgerDB.includeRested)
+    lastRates = Ledger.ComputeHeadlineRates(session, levelSessions, sessionSamples, levelSamples, LedgerDB.includeRested)
 
     text:SetText(Ledger.FormatXPRate(lastRates.sessionRate))
     ResizeToText()

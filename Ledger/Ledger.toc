@@ -2,16 +2,15 @@
 ## Title: Ledger
 ## Notes: Experience tracking. Minimal skeleton.
 ## Author: tomef
-## Version: 0.10.1
+## Version: 0.11.0
 ## SavedVariables: LedgerDB
 ## SavedVariablesPerCharacter: LedgerCharDB
 
 core/xp.lua
 core/series.lua
+core/ticks.lua
 core/events.lua
-core/time_buckets.lua
 core/level_close.lua
-core/played_baseline.lua
 core/chat_patterns.lua
 core/xp_gain_matcher.lua
 core/xp_delta.lua
@@ -24,7 +23,6 @@ core/time_bar.lua
 core/export.lua
 core/probe.lua
 core/rate.lua
-core/level_time.lua
 core/check.lua
 
 ui/frame.lua

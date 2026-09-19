@@ -4,7 +4,7 @@ describe("core/level_close.lua", function()
     before_each(function()
         Ledger = {}
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
-        assert(loadfile("Ledger/core/time_buckets.lua"))("Ledger", Ledger) -- Ledger.NewEmptyBuckets
+        assert(loadfile("Ledger/core/ticks.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/events.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/level_close.lua"))("Ledger", Ledger)
     end)
@@ -16,11 +16,10 @@ describe("core/level_close.lua", function()
             Ledger.AddEvent(s, 300, 20, "quest")
             Ledger.AddEvent(s, 650, 100, "kill")
 
-            local entry = Ledger.CloseLevel({ s }, 500)
+            local entry = Ledger.CloseLevel({ s })
 
             assert.are.equal(10, entry.level)
             assert.are.equal(170, entry.totalXP)
-            assert.are.equal(500, entry.totalPlayed)
             assert.are.same({ kill = 150, quest = 20 }, entry.bySource)
             assert.are.same({ 70, 100 }, entry.curve)
         end)
@@ -36,11 +35,10 @@ describe("core/level_close.lua", function()
             Ledger.AddEvent(b, 100, 20, "kill")
             Ledger.AddEvent(b, 1300, 8, "quest")
 
-            local entry = Ledger.CloseLevel({ a, b }, 900)
+            local entry = Ledger.CloseLevel({ a, b })
 
             assert.are.equal(20, entry.level)
             assert.are.equal(43, entry.totalXP)
-            assert.are.equal(900, entry.totalPlayed)
             assert.are.same({ kill = 30, quest = 13 }, entry.bySource)
             -- minute 1: 10 (a) + 20 (b); minute 2: 5 (a); minute 3: 8 (b)
             assert.are.same({ 30, 5, 8 }, entry.curve)
@@ -61,8 +59,8 @@ describe("core/level_close.lua", function()
             Ledger.AddEvent(level6, 300, 60, "kill")
             Ledger.AddEvent(level6, 900, 30, "quest")
 
-            local entry5 = Ledger.CloseLevel({ level5 }, 25)
-            local entry6 = Ledger.CloseLevel({ level6 }, 90)
+            local entry5 = Ledger.CloseLevel({ level5 })
+            local entry6 = Ledger.CloseLevel({ level6 })
 
             assert.are.equal(5, entry5.level)
             assert.are.equal(121, entry5.totalXP)
@@ -88,7 +86,7 @@ describe("core/level_close.lua", function()
             local b = Ledger.NewSession(5000, 15)
             Ledger.AddEvent(b, 100, 60, "kill", 20)
 
-            local entry = Ledger.CloseLevel({ a, b }, 900)
+            local entry = Ledger.CloseLevel({ a, b })
 
             assert.are.equal(106, entry.totalRested)
             -- totalXP never subtracts the bonus on its own (includeRested
@@ -100,28 +98,9 @@ describe("core/level_close.lua", function()
             local s = Ledger.NewSession(0, 3)
             Ledger.AddEvent(s, 0, 40, "kill")
 
-            local entry = Ledger.CloseLevel({ s }, 60)
+            local entry = Ledger.CloseLevel({ s })
 
             assert.are.equal(0, entry.totalRested)
-        end)
-    end)
-
-    describe("CloseLevel: unknown played time", function()
-        it("a nil totalPlayed is kept nil and flags the entry timeUnreliable", function()
-            local s = Ledger.NewSession(0, 6)
-            Ledger.AddEvent(s, 0, 50, "kill")
-
-            local entry = Ledger.CloseLevel({ s }, nil)
-
-            assert.is_nil(entry.totalPlayed)
-            assert.is_true(entry.timeUnreliable)
-        end)
-
-        it("a known totalPlayed, even 0, leaves the flag absent", function()
-            local s = Ledger.NewSession(0, 6)
-
-            assert.is_nil(Ledger.CloseLevel({ s }, 0).timeUnreliable)
-            assert.are.equal(0, Ledger.CloseLevel({ s }, 0).totalPlayed)
         end)
     end)
 
@@ -133,7 +112,7 @@ describe("core/level_close.lua", function()
             local b = Ledger.NewSession(5000, 9)
             b.initialXP = 999 -- only the level's FIRST session can carry it; never summed
 
-            local entry = Ledger.CloseLevel({ a, b }, 100, true, nil, 1000)
+            local entry = Ledger.CloseLevel({ a, b }, true, 1000)
 
             assert.are.equal(1000, entry.xpRequired)
             assert.are.equal(300, entry.initialXP)
@@ -143,7 +122,7 @@ describe("core/level_close.lua", function()
             local s = Ledger.NewSession(0, 9)
             Ledger.AddEvent(s, 0, 50, "kill")
 
-            local entry = Ledger.CloseLevel({ s }, 100)
+            local entry = Ledger.CloseLevel({ s })
 
             assert.is_nil(entry.xpRequired)
             assert.are.equal(0, entry.initialXP)
@@ -156,8 +135,8 @@ describe("core/level_close.lua", function()
             Ledger.AddEvent(s, 0, 172, "kill", 86)   -- minute 1
             Ledger.AddEvent(s, 650, 50, "quest")     -- minute 2
 
-            local entryTrue  = Ledger.CloseLevel({ s }, 120, true)
-            local entryFalse = Ledger.CloseLevel({ s }, 120, false)
+            local entryTrue  = Ledger.CloseLevel({ s }, true)
+            local entryFalse = Ledger.CloseLevel({ s }, false)
 
             assert.are.equal(222, entryTrue.totalXP)
             assert.are.same({ 172, 50 }, entryTrue.curve)
@@ -176,8 +155,8 @@ describe("core/level_close.lua", function()
             local s = Ledger.NewSession(0, 8)
             Ledger.AddEvent(s, 0, 172, "kill", 86)
 
-            local entryTrue  = Ledger.CloseLevel({ s }, 60, true)
-            local entryFalse = Ledger.CloseLevel({ s }, 60, false)
+            local entryTrue  = Ledger.CloseLevel({ s }, true)
+            local entryFalse = Ledger.CloseLevel({ s }, false)
 
             assert.are.same({ kill = 172 }, entryTrue.bySource)
             assert.are.same({ kill = 172 }, entryFalse.bySource)
@@ -188,78 +167,53 @@ describe("core/level_close.lua", function()
         it("returns zeroed totals and an empty curve without breaking", function()
             local s = Ledger.NewSession(3000, 42)
 
-            local entry = Ledger.CloseLevel({ s }, 45)
+            local entry = Ledger.CloseLevel({ s })
 
             assert.are.equal(42, entry.level)
             assert.are.equal(0, entry.totalXP)
-            assert.are.equal(45, entry.totalPlayed)
             assert.are.same({}, entry.bySource)
             assert.are.same({}, entry.curve)
-            assert.is_nil(entry.stateSeries)
-            assert.are.same({ active = 0, downtime = 0, travel = 0, dead = 0 }, entry.buckets)
+            assert.are.same(Ledger.NewTicks(), entry.ticks)
         end)
     end)
 
-    describe("time buckets", function()
-        it("derives buckets from the raw state series concatenated across all the level's sessions", function()
-            local a = Ledger.NewSession(0, 7)
-            Ledger.AppendRecord(a, Ledger.SERIES.state, Ledger.PackStateFlags({ combat = true }))
-            Ledger.AppendRecord(a, Ledger.SERIES.state, Ledger.PackStateFlags({ combat = true }))
+    describe("activity ticks (attached as they are, never aggregated)", function()
+        it("attaches the level's live counters by reference as entry.ticks", function()
+            local a = Ledger.NewSession(0, 3)
+            local levelTicks = { combat = 4, nonCombat = 3, travel = 2, dead = 1, total = 10 }
 
-            local b = Ledger.NewSession(5000, 7)
-            Ledger.AppendRecord(b, Ledger.SERIES.state, Ledger.PackStateFlags({ dead = true }))
+            local entry = Ledger.CloseLevel({ a }, true, nil, levelTicks)
 
-            local entry = Ledger.CloseLevel({ a, b }, 3)
-
-            assert.are.equal(2, entry.buckets.active)
-            assert.are.equal(1, entry.buckets.dead)
+            assert.are.equal(levelTicks, entry.ticks)
+            assert.are.same({ combat = 4, nonCombat = 3, travel = 2, dead = 1, total = 10 }, entry.ticks)
         end)
 
-        it("a session with an empty state series (nothing sampled yet) doesn't blow up", function()
-            local a = Ledger.NewSession(0, 7)
-            local b = Ledger.NewSession(5000, 7)
-            Ledger.AppendRecord(b, Ledger.SERIES.state, Ledger.PackStateFlags({ combat = true }))
+        it("does not derive them from the sessions' own counters", function()
+            local a = Ledger.NewSession(0, 3)
+            local b = Ledger.NewSession(0, 3)
+            a.ticks = { combat = 100, nonCombat = 0, travel = 0, dead = 0, total = 100 }
+            b.ticks = { combat = 0, nonCombat = 50, travel = 0, dead = 0, total = 50 }
+            local levelTicks = { combat = 1, nonCombat = 1, travel = 0, dead = 0, total = 2 }
 
-            local entry = Ledger.CloseLevel({ a, b }, 10)
+            local entry = Ledger.CloseLevel({ a, b }, true, nil, levelTicks)
 
-            assert.are.equal(1, entry.buckets.active)
+            assert.are.equal(2, entry.ticks.total) -- the level's own live counters, no re-summing
         end)
 
-        it("discards the raw series: the entry never carries it", function()
-            local a = Ledger.NewSession(0, 7)
-            Ledger.AppendRecord(a, Ledger.SERIES.state, Ledger.PackStateFlags({ combat = true }))
+        it("without counters given, the entry still has an empty set", function()
+            local entry = Ledger.CloseLevel({ Ledger.NewSession(0, 3) })
 
-            local entry = Ledger.CloseLevel({ a }, 1)
+            assert.are.same(Ledger.NewTicks(), entry.ticks)
+        end)
+
+        it("carries no series, no buckets, no thresholds and no played time", function()
+            local entry = Ledger.CloseLevel({ Ledger.NewSession(0, 3) })
 
             assert.is_nil(entry.stateSeries)
-        end)
-
-        it("records the current thresholds the buckets were derived with", function()
-            local a = Ledger.NewSession(0, 7)
-
-            local entry = Ledger.CloseLevel({ a }, 1)
-
-            assert.are.same(
-                { downtime = Ledger.DOWNTIME_THRESHOLD, sustainedMovement = Ledger.SUSTAINED_MOVEMENT_SECONDS },
-                entry.thresholds)
-        end)
-
-        it("an explicit threshold override is both applied to the buckets and recorded", function()
-            -- 1 second of combat, then 3 quiet seconds: with downtime=2
-            -- the third quiet second is already downtime; with the
-            -- default 15 all three would stay "active".
-            local a = Ledger.NewSession(0, 7)
-            local combat = Ledger.PackStateFlags({ combat = true })
-            for _, v in ipairs({ combat, 0, 0, 0 }) do
-                Ledger.AppendRecord(a, Ledger.SERIES.state, v)
-            end
-
-            local entry = Ledger.CloseLevel({ a }, 4, true, { downtime = 2 })
-
-            assert.are.equal(3, entry.buckets.active)   -- combat + 2 quiet seconds
-            assert.are.equal(1, entry.buckets.downtime)
-            assert.are.equal(2, entry.thresholds.downtime)
-            assert.are.equal(Ledger.SUSTAINED_MOVEMENT_SECONDS, entry.thresholds.sustainedMovement)
+            assert.is_nil(entry.buckets)
+            assert.is_nil(entry.thresholds)
+            assert.is_nil(entry.totalPlayed)
+            assert.is_nil(entry.timeUnreliable)
         end)
     end)
 
@@ -270,7 +224,7 @@ describe("core/level_close.lua", function()
             local b = Ledger.NewSession(5000, 7)
             b.deaths = 1
 
-            local entry = Ledger.CloseLevel({ a, b }, 10)
+            local entry = Ledger.CloseLevel({ a, b })
 
             assert.are.equal(3, entry.deaths)
         end)
@@ -278,7 +232,7 @@ describe("core/level_close.lua", function()
         it("is 0 if no session died (deaths already defaults to 0 via NewSession)", function()
             local s = Ledger.NewSession(0, 7)
 
-            local entry = Ledger.CloseLevel({ s }, 10)
+            local entry = Ledger.CloseLevel({ s })
 
             assert.are.equal(0, entry.deaths)
         end)
@@ -290,7 +244,7 @@ describe("core/level_close.lua", function()
             a.reached = 1758000000
             local b = Ledger.NewSession(5000, 7)
 
-            local entry = Ledger.CloseLevel({ a, b }, 10)
+            local entry = Ledger.CloseLevel({ a, b })
 
             assert.are.equal(1758000000, entry.reached)
         end)
@@ -298,7 +252,7 @@ describe("core/level_close.lua", function()
         it("is 0 if the session carries no reached (old schema before migrating)", function()
             local s = Ledger.NewSession(0, 7)
 
-            local entry = Ledger.CloseLevel({ s }, 10)
+            local entry = Ledger.CloseLevel({ s })
 
             assert.are.equal(0, entry.reached)
         end)

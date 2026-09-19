@@ -12,17 +12,13 @@ local XP_FIELD      = Ledger.SeriesFieldIndex(XP_SERIES, "xp")
 local SRC_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "src")
 local OFF_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "off")
 local RESTED_FIELD  = Ledger.SeriesFieldIndex(XP_SERIES, "rested")
-local STATE_SERIES  = Ledger.SERIES.state
 
 -- Creates a new session. mode ("farm"|"quest"|"dungeon"|nil) is purely
 -- informational: it must never alter any event's src. manual marks
 -- sessions opened by /ldg reset; they behave just like any other.
--- deaths (deaths in this session, separate from the "dead" time bucket)
--- starts at zero. There's no `buckets` field: time buckets are never
--- accumulated live on a session anymore, they're always DERIVED from
--- the raw per-second state series (this session's slice of
--- Ledger.SERIES.state, see core/time_buckets.lua:
--- Ledger.ComputeBucketsFromState) whenever they're needed.
+-- deaths (deaths in this session, separate from the "dead" activity
+-- counter) starts at zero. ticks is this session's own set of activity
+-- counters (core/ticks.lua), incremented live by the 1s sampler.
 function Ledger.NewSession(t0, level, mode, manual)
     return {
         t0      = t0,
@@ -30,8 +26,8 @@ function Ledger.NewSession(t0, level, mode, manual)
         mode    = mode,
         manual  = manual or false,
         deaths  = 0,
-        [XP_SERIES.key]    = {},
-        [STATE_SERIES.key] = {},
+        ticks   = Ledger.NewTicks(),
+        [XP_SERIES.key] = {},
     }
 end
 

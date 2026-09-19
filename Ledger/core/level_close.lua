@@ -1,7 +1,8 @@
 -- Ledger - core/level_close.lua
 -- Closes a level: aggregates the sessions that belong to it into the
--- data model's `levels` entry (totals, breakdown by source and
--- per-minute xp curve). Pure logic: does not use any WoW API.
+-- data model's `levels` entry (xp totals, breakdown by source and
+-- per-minute xp curve) and attaches the level's activity counters.
+-- Pure logic: does not use any WoW API.
 --
 -- The sessions must already come pre-trimmed by the caller to the
 -- level they belong to: if a real session spans two levels, its events
@@ -9,11 +10,12 @@
 -- function does not detect or cut those boundaries, it only aggregates
 -- what it's given.
 --
--- totalPlayed is received already computed (from TIME_PLAYED_MSG, see
--- core/played_baseline.lua and ui/xp_capture.lua); this function does
--- not compute it. It can be nil when the played-time baseline was
--- unknown at close: then the entry records no totalPlayed at all and
--- carries timeUnreliable = true, never an invented number.
+-- Time is not computed here at all: the level's activity counters
+-- (core/ticks.lua) are incremented live by the sampler on
+-- LedgerCharDB.levelTicks, and this function just attaches that table
+-- as entry.ticks, as it is -- no aggregation and no recalculation, there
+-- is no series left to recalculate from. The caller starts a fresh
+-- levelTicks for the next level.
 
 local ADDON_NAME, Ledger = ...
 
@@ -23,7 +25,6 @@ local XP_SERIES    = Ledger.SERIES.xp
 local OFF_FIELD    = Ledger.SeriesFieldIndex(XP_SERIES, "off")
 local XP_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "xp")
 local RESTED_FIELD = Ledger.SeriesFieldIndex(XP_SERIES, "rested")
-local STATE_SERIES = Ledger.SERIES.state
 
 -- offset is in tenths of a second; 1 minute = 600 tenths.
 local TENTHS_PER_MINUTE = 600
@@ -55,16 +56,8 @@ end
 -- affects totalRested, which is always the real accumulated bonus, nor
 -- bySource, which stays the breakdown of the total xp as-is.
 --
--- Time buckets are never summed from a per-session accumulator: the
--- level's raw per-second state series (every session's
--- Ledger.SERIES.state slice, concatenated in order) is aggregated ONCE
--- here by Ledger.ComputeBucketsFromState (core/time_buckets.lua) into
--- entry.buckets, and then discarded -- raw samples only live for the
--- level in progress. entry.thresholds records the thresholds that
--- produced those buckets ({ downtime=, sustainedMovement= }; `thresholds`
--- is an optional override, each field defaulting to the current
--- Ledger.DOWNTIME_THRESHOLD/Ledger.SUSTAINED_MOVEMENT_SECONDS), so a
--- level closed under other thresholds can be told apart.
+-- levelTicks (optional; a fresh empty set when omitted) is the level's
+-- activity counters, attached by reference as entry.ticks.
 --
 -- xpRequired (optional) is the xp the level required to complete
 -- (UnitXPMax of that level, known at the ding: see
@@ -73,7 +66,7 @@ end
 -- entry.initialXP is the xp the player already had on this level before
 -- tracking started (sessions[1].initialXP, 0 if none): the level's
 -- recorded xp + initialXP is what should add up to xpRequired.
-function Ledger.CloseLevel(sessions, totalPlayed, includeRested, thresholds, xpRequired)
+function Ledger.CloseLevel(sessions, includeRested, xpRequired, levelTicks)
     local totalXP     = 0
     local totalRested = 0
     local deaths      = 0
@@ -101,12 +94,6 @@ function Ledger.CloseLevel(sessions, totalPlayed, includeRested, thresholds, xpR
         curve[minute] = minuteXP[minute] or 0
     end
 
-    local usedThresholds = {
-        downtime          = (thresholds and thresholds.downtime) or Ledger.DOWNTIME_THRESHOLD,
-        sustainedMovement = (thresholds and thresholds.sustainedMovement) or Ledger.SUSTAINED_MOVEMENT_SECONDS,
-    }
-    local buckets = Ledger.ComputeBucketsFromState(Ledger.ConcatSeries(sessions, STATE_SERIES), usedThresholds)
-
     return {
         level       = sessions[1].level,
         reached     = sessions[1].reached or 0,
@@ -114,17 +101,10 @@ function Ledger.CloseLevel(sessions, totalPlayed, includeRested, thresholds, xpR
         xpRequired  = xpRequired,
         totalXP     = totalXP,
         totalRested = totalRested,
-        totalPlayed = totalPlayed,
-        -- true (never false: the field is simply absent on a level with
-        -- a trustworthy time) when totalPlayed is nil. Anything that
-        -- reads totalPlayed must skip these levels instead of treating
-        -- the missing value as 0.
-        timeUnreliable = (totalPlayed == nil) or nil,
         deaths      = deaths,
         bySource    = bySource,
         curve       = curve,
-        buckets     = buckets,
-        thresholds  = usedThresholds,
+        ticks       = levelTicks or Ledger.NewTicks(),
     }
 end
 

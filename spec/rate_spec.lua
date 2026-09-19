@@ -4,21 +4,26 @@ describe("core/rate.lua", function()
     before_each(function()
         Ledger = {}
         assert(loadfile("Ledger/core/series.lua"))("Ledger", Ledger)
-        assert(loadfile("Ledger/core/time_buckets.lua"))("Ledger", Ledger)
+        assert(loadfile("Ledger/core/ticks.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/events.lua"))("Ledger", Ledger)
         assert(loadfile("Ledger/core/rate.lua"))("Ledger", Ledger)
     end)
 
     describe("ComputeXPRate", function()
-        it("computes xp per hour from xp and elapsed seconds", function()
+        it("its minimum is a number of SAMPLES, not seconds of wall clock", function()
+            assert.are.equal(60, Ledger.RATE_MIN_SAMPLES)
+            assert.is_nil(Ledger.RATE_MIN_SECONDS)
+        end)
+
+        it("computes xp per hour from xp and activity samples (one sample = one second)", function()
             assert.are.equal(3600, Ledger.ComputeXPRate(600, 600))
         end)
 
-        it("a zero numerator with enough elapsed time is a real rate of 0, not nil", function()
+        it("a zero numerator with enough samples is a real rate of 0, not nil", function()
             assert.are.equal(0, Ledger.ComputeXPRate(0, 600))
         end)
 
-        it("returns nil below the minimum elapsed threshold (too noisy)", function()
+        it("returns nil below the minimum sample threshold (too noisy)", function()
             assert.is_nil(Ledger.ComputeXPRate(50, 59))
         end)
 
@@ -26,12 +31,12 @@ describe("core/rate.lua", function()
             assert.are.equal(3000, Ledger.ComputeXPRate(50, 60))
         end)
 
-        it("returns nil with nil xp or nil elapsed", function()
+        it("returns nil with nil xp or nil samples", function()
             assert.is_nil(Ledger.ComputeXPRate(nil, 600))
             assert.is_nil(Ledger.ComputeXPRate(600, nil))
         end)
 
-        it("returns nil with zero or negative elapsed", function()
+        it("returns nil with zero or negative samples", function()
             assert.is_nil(Ledger.ComputeXPRate(600, 0))
             assert.is_nil(Ledger.ComputeXPRate(600, -5))
         end)
@@ -64,7 +69,7 @@ describe("core/rate.lua", function()
     end)
 
     describe("ComputeHeadlineRates: session with no data", function()
-        it("a fresh session with no events and enough elapsed time rates at 0, not a dash", function()
+        it("a fresh session with no events and enough samples rates at 0, not a dash", function()
             local session = Ledger.NewSession(0, 10)
             local rates = Ledger.ComputeHeadlineRates(session, { session }, 600, 600, true)
 
@@ -92,7 +97,7 @@ describe("core/rate.lua", function()
     end)
 
     describe("ComputeHeadlineRates: session under a minute", function()
-        it("both rates come back nil (dash) when elapsed is under the threshold", function()
+        it("both rates come back nil (dash) when the samples are under the threshold", function()
             local session = Ledger.NewSession(0, 10)
             Ledger.AddEvent(session, 0, 50, "kill")
             local rates = Ledger.ComputeHeadlineRates(session, { session }, 30, 30, true)
@@ -101,7 +106,7 @@ describe("core/rate.lua", function()
             assert.is_nil(rates.levelRate)
         end)
 
-        it("the session rate can be under threshold while the level rate isn't (different elapsed times)", function()
+        it("the session rate can be under threshold while the level rate isn't (different sample counts)", function()
             local session = Ledger.NewSession(0, 10)
             Ledger.AddEvent(session, 0, 50, "kill")
             local rates = Ledger.ComputeHeadlineRates(session, { session }, 30, 3600, true)
@@ -118,7 +123,7 @@ describe("core/rate.lua", function()
             local b = Ledger.NewSession(1000, 10)
             Ledger.AddEvent(b, 0, 50, "quest")
 
-            -- session = b alone (1800s elapsed); level = a + b (3600s elapsed).
+            -- session = b alone (1800 samples); level = a + b (3600 samples).
             local rates = Ledger.ComputeHeadlineRates(b, { a, b }, 1800, 3600, true)
 
             assert.are.equal(100, rates.sessionRate) -- 50xp/1800s*3600 = 100
