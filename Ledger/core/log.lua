@@ -1,8 +1,8 @@
 -- Ledger - core/log.lua
 -- State of the log subsystem: active level, ring buffer and chat-echo
 -- flag. Pure logic: does not use any WoW API, the clock is always
--- received as a parameter. Lives only in memory (like the bucket
--- tracker and the matcher): there's no SavedVariable for this yet.
+-- received as a parameter. Lives only in memory (like the matcher):
+-- there's no SavedVariable for this yet.
 
 local ADDON_NAME, Ledger = ...
 
@@ -13,6 +13,27 @@ local LEVEL_RANK = { off = 0, error = 1, info = 2, trace = 3 }
 Ledger.LOG_LEVELS = { "off", "error", "info", "trace" }
 
 Ledger.LOG_BUFFER_CAPACITY = 200
+
+-- Chat color of each level, as the RRGGBB of a |cffRRGGBB escape: red for
+-- errors so they stand out while playing, cyan for info, dim gray for the
+-- noisy trace. A level without an entry is printed uncolored.
+Ledger.LOG_COLORS = { error = "ff5555", info = "55ccff", trace = "9a9a9a" }
+
+-- One log line as it is echoed to chat: "[level] message", wrapped in the
+-- level's color. The level tag is there too so a line is still readable
+-- if the colors don't show. `|` in the message is doubled, so text
+-- recorded from the game (a raw chat message) can never be read by the
+-- chat frame as an escape sequence of its own, and can't cut the color
+-- short with a stray |r. Meant for ONE line: the caller splits a
+-- multiline message first, since the color must wrap each line.
+function Ledger.FormatLogChatLine(level, msg)
+    local text = string.format("[%s] %s", level, (tostring(msg):gsub("|", "||")))
+    local color = Ledger.LOG_COLORS[level]
+    if not color then
+        return text
+    end
+    return "|cff" .. color .. text .. "|r"
+end
 
 -- Starts at "trace" (everything is recorded into the buffer, nothing is
 -- echoed to chat until /ldg log chat): the buffer is in memory only and

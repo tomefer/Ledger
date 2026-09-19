@@ -26,7 +26,7 @@ end
 
 ----------------------------------------------------------------------
 -- Log state (level, buffer, chat echo). In memory only, like the
--- bucket tracker and the matcher: it isn't persisted.
+-- matcher: it isn't persisted.
 ----------------------------------------------------------------------
 
 Ledger.logState = Ledger.NewLogState()
@@ -39,7 +39,11 @@ Ledger.logState = Ledger.NewLogState()
 -- their decisions without touching any WoW API themselves.
 function Ledger.Log(level, msg)
     if Ledger.LogMessage(Ledger.logState, level, msg, GetTime()) then
-        Print(msg)
+        -- Colored by level (Ledger.FormatLogChatLine); each line of a
+        -- multiline message is colored on its own.
+        for line in tostring(msg):gmatch("[^\n]+") do
+            DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99Ledger|r " .. Ledger.FormatLogChatLine(level, line))
+        end
     end
 end
 

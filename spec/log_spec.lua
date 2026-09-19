@@ -113,6 +113,37 @@ describe("core/log.lua", function()
         end)
     end)
 
+    describe("FormatLogChatLine: colored chat echo", function()
+        it("wraps the line in the level's color and tags it with the level", function()
+            assert.are.equal("|cffff5555[error] boom|r", Ledger.FormatLogChatLine("error", "boom"))
+            assert.are.equal("|cff55ccff[info] hi|r", Ledger.FormatLogChatLine("info", "hi"))
+            assert.are.equal("|cff9a9a9a[trace] x|r", Ledger.FormatLogChatLine("trace", "x"))
+        end)
+
+        it("gives every real level a different color", function()
+            local seen = {}
+            for _, level in ipairs({ "error", "info", "trace" }) do
+                assert.is_not_nil(Ledger.LOG_COLORS[level])
+                assert.is_nil(seen[Ledger.LOG_COLORS[level]])
+                seen[Ledger.LOG_COLORS[level]] = true
+            end
+        end)
+
+        it("doubles a | in the message so it can't be read as an escape or end the color early", function()
+            local line = Ledger.FormatLogChatLine("error", "raw <<|cffff0000red|r>>")
+
+            assert.are.equal("|cffff5555[error] raw <<||cffff0000red||r>>|r", line)
+        end)
+
+        it("a level with no color is just the tagged text, no escapes", function()
+            assert.are.equal("[bogus] hi", Ledger.FormatLogChatLine("bogus", "hi"))
+        end)
+
+        it("accepts a non-string message", function()
+            assert.are.equal("|cff55ccff[info] 42|r", Ledger.FormatLogChatLine("info", 42))
+        end)
+    end)
+
     describe("FormatLogBuffer", function()
         it("indicates when the buffer is empty", function()
             local state = Ledger.NewLogState()

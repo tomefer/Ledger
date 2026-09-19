@@ -1238,6 +1238,19 @@ activo):
   encola, incluida la separación real de cada emparejamiento exitoso
   (para poder recalibrar `Ledger.MAX_MATCH_GAP` con datos reales).
 
+**Eco al chat en color** (`/ldg log chat`): cada línea sale como `Ledger
+[nivel] mensaje`, coloreada por nivel con `Ledger.FormatLogChatLine` /
+`Ledger.LOG_COLORS` (`core/log.lua`, puro y testeado): `error` rojo
+(`ff5555`), `info` cian (`55ccff`), `trace` gris (`9a9a9a`). La etiqueta
+`[nivel]` va también en el texto por si el color no se ve. Un `|` del
+mensaje se duplica (`||`) para que un mensaje de chat crudo del juego no se
+lea como un escape propio ni corte el color con un `|r` suelto; un mensaje
+de varias líneas se colorea línea a línea (`ui/events.lua: Ledger.Log`). El
+color solo existe en el chat: el panel de `/ldg log show` es un EditBox
+para copiar con Ctrl+C y los escapes acabarían en el portapapeles, así que
+allí el texto va sin color (`Ledger.FormatLogBuffer`, que sí lleva la
+etiqueta `[nivel]`).
+
 `/ldg strings` (`core/chat_patterns.lua: Ledger.FormatXPGainStrings`)
 imprime cada global string `COMBATLOG_XPGAIN_*` en uso con su valor
 literal en este cliente y el patrón Lua derivado, para verificar a ojo
