@@ -6,8 +6,7 @@ Interface/AddOns, apuntes viejos) es residuo del nombre anterior.
 
 **Multi-cliente desde 2026-09-17**: un solo paquete (`## Interface:
 11509, 16001` en `Ledger.toc`; un único fichero en el repo, sin TOCs
-separados por flavor — salvo el ajuste en el despliegue, ver `deploy.sh`
-más abajo) sirve
+separados por flavor) sirve
 tanto a Classic Era (cliente 1.15.x, interface 11509) como a la beta de
 WoW Forever (build 1.60.1, interface 16001, también línea Classic). No
 se asume que ninguna API se comporte igual en ambos: `/ldg probe` (ver
@@ -117,14 +116,9 @@ vez de suponer.
   exportando `LEDGER_WOW_PATH` si la instalación vive en otro sitio.
   Aborta con un error claro si esa ruta no existe, o si `flavor` no es
   uno de los conocidos. Al terminar imprime la versión del .toc
-  desplegada y la hora. **Excepción en la beta (`forever`, decidido
-  2026-09-19)**: el `.toc` DESPLEGADO lleva solo `## Interface: 16001`
-  (`FLAVOR_INTERFACE` en `deploy.sh`, `sed` sobre la copia; el del repo no
-  se toca). Motivo: ver "SavedVariables no se cargan en la beta" — hipótesis
-  sin confirmar de que la línea con dos números hace que el cliente no
-  cargue las SavedVariables. Si con esto siguen sin cargarse, la causa es
-  otra y esta excepción sobra. `classic_era` despliega el `.toc` tal cual.
-  **Hay que ejecutarlo (con el flavor que toque)
+  desplegada y la hora. Los dos flavors despliegan el `.toc` tal cual (0.11.6–0.11.7 desplegaban
+  en la beta un `.toc` con solo `## Interface: 16001`; se quitó al demostrar
+  que no influía, ver "SavedVariables en la beta"). **Hay que ejecutarlo (con el flavor que toque)
   tras cualquier cambio en los ficheros del addon** (antes recreaba a
   mano un symlink desde
   Interface/AddOns; ya no hace falta, el script sustituye ese paso
@@ -1370,36 +1364,63 @@ arriba:
     el futuro, debe loguear siempre con `geterrorhandler()(msg)` o
     equivalente, nunca descartar el error sin más.
 
-### SavedVariables no se cargan en la beta (2026-09-19, bug abierto)
+### SavedVariables en la beta: el cliente ignora los ficheros previos al arranque (2026-09-19)
 
-En la beta de WoW Forever (build 1.60.1, interface 16001) **ni `LedgerCharDB`
-ni `LedgerDB` llegan desde disco al addon**, aunque las dos se escriben bien
-al hacer logout/`/reload`. Consecuencias observadas: cada carga abre una
-sesión nueva (`initialXP` = toda la xp del nivel, `t0` = instante de la
-carga) y las anteriores desaparecen; `ratePos` y demás ajustes de `LedgerDB`
-vuelven a los valores por defecto (por eso "se pierde" la barra tras un
-`/reload`: `barShown` vuelve a `false`). Evidencia: el log de un login
-completo con datos en disco daba `ADDON_LOADED: LedgerCharDB from disk:
-type=nil`; `ratePos` está en el guardado de las 17:27 y ya no en el de las
-17:44 (cuenta); en Classic Era la misma `t0` se conserva entre guardados
-consecutivos con los eventos creciendo, y en la beta nunca (también en
-versiones anteriores al refactor de migraciones y en otros personajes:
-Ruma-Sa, Basuko-Nazario). **No** es el borrado por versión (todos los
-guardados dicen `version = 9`; `wiped=false` en el log) ni el redibujado de
-la barra. Sin causa confirmada: cliente que carga las SavedVariables tarde,
-o nunca, o `.toc` con `## Interface: 11509, 16001` mal interpretado.
-Primer intento (0.11.6): `deploy.sh forever` despliega el `.toc` con solo
-`## Interface: 16001`; **pendiente de verificar** con el log `SVState` y
-comprobando que una sesión sobrevive a un `/reload`.
+**En la beta de WoW Forever (build 1.60.1, interface 16001) el cliente no
+carga los SavedVariables que ya existían en disco cuando arrancó**, aunque
+los escribe bien al hacer logout/`/reload`. Los ficheros creados durante la
+sesión del cliente sí se cargan en un `/reload`. **Es un comportamiento del
+cliente: el addon no puede arreglarlo.** Classic Era carga los mismos
+ficheros sin problema.
 
-Instrumentado a nivel INFO (`/ldg log show`): `ADDON_LOADED` (desde disco y
-tras `InitCharDB`, `Ledger.SummarizeCharDB`), `StartTracking` (reanuda o
-arranque en frío) y `SVState[...]` (`ui/events.lua:
-LogSavedVariablesState`) en `ADDON_LOADED`, `PLAYER_LOGIN`,
-`PLAYER_ENTERING_WORLD`, +5s y +30s: dirección de cada tabla (una
-sustitución tardía se vería como otra dirección), claves de `LedgerDB`,
-resumen de `LedgerCharDB` y lo que el cliente ha leído de las líneas
-`SavedVariables*` del `.toc`.
+Síntomas en Ledger: cada arranque del cliente abre una sesión en frío
+(`initialXP` = toda la xp del nivel, `t0` = instante de la carga), las
+sesiones anteriores desaparecen y los ajustes de `LedgerDB` (`ratePos`,
+`barShown`...) vuelven a sus valores por defecto. Como el fichero de
+Ledger casi siempre existe ya al arrancar, en la práctica los datos solo
+viven mientras dure esa sesión del cliente.
+
+**Cómo se demostró** (addons de prueba desechables, ya borrados, cada uno
+con un contador en un SavedVariable de cuenta y otro de personaje):
+- Un addon cuyos ficheros se crean dentro de la sesión carga en el primer
+  `/reload` (`prev loads` sube); tras cerrar y volver a arrancar el cliente,
+  los mismos ficheros llegan como `nil`, con el contador de nuevo en 0.
+- Pasa igual con cualquier addon (5 distintos) y, con Ledger, en cuanto se
+  apartaron sus ficheros del disco antes de arrancar: en ese arranque
+  Ledger sí reanudó la sesión tras un `/reload` (`StartTracking: resuming
+  saved sessions`), y al arranque siguiente volvió a `cold start`.
+- Indicio, no prueba: los SavedVariables de Blizzard tampoco parecen acumular
+  entre arranques (`Blizzard_PTRIssueReporter_Saved` guardaba 12 s con horas jugadas).
+
+**Descartado**: el `.toc` con `## Interface: 11509, 16001` (con solo
+`16001` seguía igual); el orden de carga o la posición alfabética del
+addon; el nombre `Ledger`/`LedgerDB`; la forma o el tamaño de los datos
+(un addon con el mismo `.toc`, subcarpetas y tablas anidadas se comporta
+igual que uno mínimo); el borrado por versión (`wiped=false`, todos los
+guardados dicen `version = 9`); permisos y ACL de NTFS, redirección de
+VirtualStore, copias en otras rutas, y las lecturas desde WSL (mismo
+resultado en un arranque sin tocar los ficheros desde WSL).
+
+**Sin confirmar**: por qué el cliente los ignora. Se planteó que mirara la
+fecha de modificación o de creación del fichero (el juego reescribe en el
+sitio, y la de creación no cambia entre guardados), pero esa prueba no llegó
+a hacerse. No es un fallo de `GetAddOnMetadata`: `GetAddOnMetadata(addon,
+"SavedVariables")` devuelve `nil` también para addons que sí cargan, así que
+no sirve como sonda.
+
+**Cómo reconocerlo en el log** (`/ldg log show`, nivel INFO): en un personaje
+que ya había jugado, `ADDON_LOADED: LedgerCharDB from disk: type=nil`
+seguido de `StartTracking: cold start`. Con datos cargados sale `from disk:
+version=... sessions=N ...` y `StartTracking: resuming saved sessions`.
+Instrumentación que queda: solo esas dos líneas (`ui/events.lua`,
+`ui/xp_capture.lua`, con `Ledger.SummarizeCharDB`); las líneas `SVState[...]`
+(volcado de direcciones de tabla a varios instantes del arranque) se
+quitaron en 0.11.8 al no aportar ya nada.
+
+**Repro mínimo para reportarlo a Blizzard**: un addon con
+`## SavedVariables: XDB` y un `ADDON_LOADED` que haga `XDB = XDB or {}`
+y sume uno a `XDB.loads`, imprimiendo el valor previo. Arrancar, `/reload`
+(carga), cerrar el cliente del todo, arrancar de nuevo: llega `nil`.
 
 ### Diagnóstico de carga
 
