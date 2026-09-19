@@ -853,8 +853,9 @@ contrastándolo con dos medidas independientes del contador del servidor:
 - **En el cierre** (`ui/xp_capture.lua: CloseCurrentLevel`): cada
   violación se loguea a ERROR (`LevelClose invariant violated (level N,
   id): ...`). La entrada se guarda tal cual se calculó, no se "corrige" en
-  silencio. Ojo: el nivel de log por defecto es `off`, así que ese ERROR
-  solo llega al buffer con `/ldg log error` (o más verboso) activo;
+  silencio. El nivel de log por defecto es `trace` (desde 0.10.1), así que ese
+  ERROR queda en el buffer sin activar nada (`/ldg log show`), aunque el
+  buffer es un anillo de 200 entradas y el ruido TRACE lo va desplazando;
   `/ldg check` lo vuelve a mostrar siempre.
 - **En `/ldg check`**: cada violación es una línea `[!!]` por nivel. La
   antigua frase "not played: logged out or away" sobre un nivel que los
@@ -1439,7 +1440,7 @@ matcher — ver "Pendiente" más abajo), creado en `ui/events.lua` como
 
 ```lua
 state = {
-    level  = "off",  -- "off" | "error" | "info" | "trace"
+    level  = "trace", -- "off" | "error" | "info" | "trace" (por defecto trace)
     chat   = false,  -- eco al chat activado/desactivado
     buffer = {},     -- anillo de hasta Ledger.LOG_BUFFER_CAPACITY (200)
                       -- entradas { t, level, msg }, más antigua primero

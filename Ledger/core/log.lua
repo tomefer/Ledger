@@ -14,8 +14,12 @@ Ledger.LOG_LEVELS = { "off", "error", "info", "trace" }
 
 Ledger.LOG_BUFFER_CAPACITY = 200
 
+-- Starts at "trace" (everything is recorded into the buffer, nothing is
+-- echoed to chat until /ldg log chat): the buffer is in memory only and
+-- costs nothing to look at, whereas a violation logged at ERROR under
+-- "off" (e.g. a level-close invariant, ui/xp_capture.lua) was simply lost.
 function Ledger.NewLogState()
-    return { level = "off", chat = false, buffer = {} }
+    return { level = "trace", chat = false, buffer = {} }
 end
 
 function Ledger.IsValidLogLevel(level)
