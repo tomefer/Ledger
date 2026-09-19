@@ -181,12 +181,15 @@ local function LogSavedVariablesState(where)
         for _ in pairs(LedgerDB) do dbKeys = dbKeys + 1 end
     end
     Ledger.Log("info", string.format(
-        "SVState[%s]: LedgerDB=%s keys=%d ratePos=%s | LedgerCharDB=%s %s | toc SavedVariables=%s PerCharacter=%s",
-        where, tostring(LedgerDB), dbKeys,
+        "SVState[%s]: fileScope first=%s events=%s last=%s | LedgerDB=%s keys=%d ratePos=%s | LedgerCharDB=%s %s | toc SavedVariables=%s PerCharacter=%s",
+        where, tostring(Ledger.svProbe.first), tostring(Ledger.svProbe.events), tostring(Ledger.svProbe.last),
+        tostring(LedgerDB), dbKeys,
         type(LedgerDB) == "table" and tostring(LedgerDB.ratePos ~= nil) or "n/a",
         tostring(LedgerCharDB), Ledger.SummarizeCharDB(LedgerCharDB),
         meta("SavedVariables"), meta("SavedVariablesPerCharacter")))
 end
+
+Ledger.svProbe.events = type(LedgerDB) .. "/" .. type(LedgerCharDB)
 
 local wipeNotice -- set on ADDON_LOADED when saved data of another version was wiped
 

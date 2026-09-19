@@ -2,7 +2,7 @@
 ## Title: Ledger
 ## Notes: Experience tracking. Minimal skeleton.
 ## Author: tomef
-## Version: 0.11.6
+## Version: 0.11.7
 ## SavedVariables: LedgerDB
 ## SavedVariablesPerCharacter: LedgerCharDB
 
