@@ -6,11 +6,6 @@ local ADDON_NAME, Ledger = ...
 
 print("Ledger: core/xp.lua")
 
--- SavedVariables diagnostics: what the two globals look like while the
--- addon's files are still being executed (see ui/events.lua:
--- LogSavedVariablesState). Only records, never touches them.
-Ledger.svProbe = { first = type(LedgerDB) .. "/" .. type(LedgerCharDB) }
-
 -- Saved-data schema version. There are NO migrations: if the version
 -- found on disk for a character's data differs from this one, that data
 -- is wiped and tracking starts clean (see Ledger.InitCharDB). Bump this

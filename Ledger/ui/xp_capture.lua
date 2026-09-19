@@ -564,7 +564,3 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         end
     end
 end)
-
--- Last file of the .toc: last chance to see the SavedVariables during the
--- file-load phase (see ui/events.lua: LogSavedVariablesState).
-Ledger.svProbe.last = type(LedgerDB) .. "/" .. type(LedgerCharDB)

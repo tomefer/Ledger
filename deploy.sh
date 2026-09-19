@@ -31,18 +31,6 @@ declare -A FLAVOR_DIRS=(
     [forever]="_classic_beta_"
 )
 
-# Interface line written into the DEPLOYED Ledger.toc for flavors that
-# need their own (the repo keeps a single .toc with both numbers). On
-# the WoW Forever beta the client was not loading the addon's
-# SavedVariables at all (LedgerDB/LedgerCharDB arrived nil at
-# ADDON_LOADED, every /reload lost the level's sessions), while Classic
-# Era loads them fine with the same package; suspected cause is the
-# two-number "## Interface: 11509, 16001" line, so the beta gets only its
-# own number. Flavors not listed here deploy the .toc untouched.
-declare -A FLAVOR_INTERFACE=(
-    [forever]="16001"
-)
-
 FLAVOR_DIR="${FLAVOR_DIRS[$FLAVOR]:-}"
 if [ -z "$FLAVOR_DIR" ]; then
     echo "error: unknown flavor '$FLAVOR' -- expected one of: ${!FLAVOR_DIRS[*]}" >&2
@@ -77,12 +65,6 @@ DEST="$WOW_ADDONS_PATH/Ledger"
 echo "Deploying $ADDON_SRC -> $DEST (flavor: $FLAVOR)"
 rm -rf -- "$DEST"
 cp -r -- "$ADDON_SRC" "$DEST"
-
-INTERFACE_OVERRIDE="${FLAVOR_INTERFACE[$FLAVOR]:-}"
-if [ -n "$INTERFACE_OVERRIDE" ]; then
-    sed -i "s/^## Interface:.*/## Interface: $INTERFACE_OVERRIDE/" "$DEST/Ledger.toc"
-    echo "Deployed .toc uses '## Interface: $INTERFACE_OVERRIDE' for flavor $FLAVOR"
-fi
 
 VERSION="$(sed -n 's/^## Version: *//p' "$ADDON_TOC" | head -n1)"
 
