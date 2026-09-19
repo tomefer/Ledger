@@ -5,7 +5,9 @@ renombrado a Ledger — si ves "XPTrack" en algún sitio (código, symlink de
 Interface/AddOns, apuntes viejos) es residuo del nombre anterior.
 
 **Multi-cliente desde 2026-09-17**: un solo paquete (`## Interface:
-11509, 16001` en `Ledger.toc`, nunca TOCs separados por flavor) sirve
+11509, 16001` en `Ledger.toc`; un único fichero en el repo, sin TOCs
+separados por flavor — salvo el ajuste en el despliegue, ver `deploy.sh`
+más abajo) sirve
 tanto a Classic Era (cliente 1.15.x, interface 11509) como a la beta de
 WoW Forever (build 1.60.1, interface 16001, también línea Classic). No
 se asume que ninguna API se comporte igual en ambos: `/ldg probe` (ver
@@ -115,7 +117,14 @@ vez de suponer.
   exportando `LEDGER_WOW_PATH` si la instalación vive en otro sitio.
   Aborta con un error claro si esa ruta no existe, o si `flavor` no es
   uno de los conocidos. Al terminar imprime la versión del .toc
-  desplegada y la hora. **Hay que ejecutarlo (con el flavor que toque)
+  desplegada y la hora. **Excepción en la beta (`forever`, decidido
+  2026-09-19)**: el `.toc` DESPLEGADO lleva solo `## Interface: 16001`
+  (`FLAVOR_INTERFACE` en `deploy.sh`, `sed` sobre la copia; el del repo no
+  se toca). Motivo: ver "SavedVariables no se cargan en la beta" — hipótesis
+  sin confirmar de que la línea con dos números hace que el cliente no
+  cargue las SavedVariables. Si con esto siguen sin cargarse, la causa es
+  otra y esta excepción sobra. `classic_era` despliega el `.toc` tal cual.
+  **Hay que ejecutarlo (con el flavor que toque)
   tras cualquier cambio en los ficheros del addon** (antes recreaba a
   mano un symlink desde
   Interface/AddOns; ya no hace falta, el script sustituye ese paso
@@ -1377,8 +1386,11 @@ consecutivos con los eventos creciendo, y en la beta nunca (también en
 versiones anteriores al refactor de migraciones y en otros personajes:
 Ruma-Sa, Basuko-Nazario). **No** es el borrado por versión (todos los
 guardados dicen `version = 9`; `wiped=false` en el log) ni el redibujado de
-la barra. Sin causa conocida: cliente que carga las SavedVariables tarde,
+la barra. Sin causa confirmada: cliente que carga las SavedVariables tarde,
 o nunca, o `.toc` con `## Interface: 11509, 16001` mal interpretado.
+Primer intento (0.11.6): `deploy.sh forever` despliega el `.toc` con solo
+`## Interface: 16001`; **pendiente de verificar** con el log `SVState` y
+comprobando que una sesión sobrevive a un `/reload`.
 
 Instrumentado a nivel INFO (`/ldg log show`): `ADDON_LOADED` (desde disco y
 tras `InitCharDB`, `Ledger.SummarizeCharDB`), `StartTracking` (reanuda o
