@@ -292,6 +292,9 @@ end
 -- the addon, just as inexact as initialXP).
 local function StartTracking(t, level)
     sessions = LedgerCharDB.sessions
+    Ledger.Log("info", string.format("StartTracking: %s (%s)",
+        #sessions == 0 and "cold start, no saved sessions" or "resuming saved sessions",
+        Ledger.SummarizeCharDB(LedgerCharDB)))
     if #sessions == 0 then
         local session = OpenSession(t, level, false)
         session.initialXP = UnitXP("player")

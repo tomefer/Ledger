@@ -109,4 +109,26 @@ describe("core/state_dump.lua", function()
             assert.is_not_nil(text:find("Activity, % of samples: Combat 75.0% | Non-combat 25.0% | Travel 0.0% | Dead 0.0%", 1, true))
         end)
     end)
+
+    describe("SummarizeCharDB", function()
+        it("describes a populated database", function()
+            local session = Ledger.NewSession(0, 10)
+            Ledger.AddEvent(session, 10, 50, "kill", 0)
+            Ledger.AddEvent(session, 20, 30, "quest", 0)
+            local text = Ledger.SummarizeCharDB({
+                version = 9, sessions = { session }, levels = { [9] = {} }, levelTicks = { total = 105 },
+            })
+
+            assert.are.equal("version=9 sessions=1 events=2 closedLevels=1 levelSamples=105", text)
+        end)
+
+        it("says so when it isn't a table at all", function()
+            assert.are.equal("type=nil", Ledger.SummarizeCharDB(nil))
+        end)
+
+        it("doesn't error on a database missing its fields", function()
+            assert.are.equal("version=nil sessions=none events=0 closedLevels=0 levelSamples=nil",
+                Ledger.SummarizeCharDB({}))
+        end)
+    end)
 end)

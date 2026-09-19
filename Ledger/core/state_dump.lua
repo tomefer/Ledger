@@ -93,3 +93,35 @@ function Ledger.FormatState(charDB)
         FormatLevels(charDB.levels),
     }, "\n")
 end
+
+-- One-line description of a LedgerCharDB-shaped value for the startup
+-- diagnostics: what type it is, its schema version, how many sessions,
+-- events and activity samples it holds and how many levels are closed.
+-- Meant to be logged BEFORE and AFTER Ledger.InitCharDB, so a /reload
+-- that ends up with an empty database shows exactly at which step the
+-- data was (or wasn't) there. Never errors on a malformed value.
+function Ledger.SummarizeCharDB(charDB)
+    if type(charDB) ~= "table" then
+        return "type=" .. type(charDB)
+    end
+
+    local sessions = type(charDB.sessions) == "table" and charDB.sessions or nil
+    local sessionCount, eventCount = 0, 0
+    if sessions then
+        sessionCount = #sessions
+        for _, session in ipairs(sessions) do
+            eventCount = eventCount + Ledger.EventCount(session)
+        end
+    end
+
+    local levelCount = 0
+    if type(charDB.levels) == "table" then
+        for _ in pairs(charDB.levels) do levelCount = levelCount + 1 end
+    end
+
+    local samples = type(charDB.levelTicks) == "table" and charDB.levelTicks.total or nil
+
+    return string.format("version=%s sessions=%s events=%d closedLevels=%d levelSamples=%s",
+        tostring(charDB.version), sessions and tostring(sessionCount) or "none",
+        eventCount, levelCount, tostring(samples))
+end

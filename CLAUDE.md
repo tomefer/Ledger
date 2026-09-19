@@ -1361,6 +1361,21 @@ arriba:
     el futuro, debe loguear siempre con `geterrorhandler()(msg)` o
     equivalente, nunca descartar el error sin más.
 
+### Diagnóstico de arranque de `LedgerCharDB` (2026-09-19)
+
+Bug abierto: en la beta de WoW Forever, cada `/reload` o login abre una
+sesión NUEVA (`initialXP` = toda la xp del nivel, `t0` = el instante de la
+carga) y las sesiones anteriores del nivel desaparecen (ni en `sessions` ni
+en `levels`), aunque el `SavedVariables` guardado justo antes sí las
+contenía y un cliente simulado que carga ese mismo fichero las conserva.
+Sin causa conocida: no hay en el código ningún camino que vacíe `sessions`
+salvo `/ldg wipe confirm` y el cierre de nivel. Instrumentado, a nivel INFO
+(`/ldg log show`): `ADDON_LOADED` loguea el `LedgerCharDB` que entrega el
+cliente desde disco y el resultante tras `InitCharDB`
+(`Ledger.SummarizeCharDB`, `core/state_dump.lua`), y `StartTracking` dice si
+arranca en frío o reanuda. Qué línea sale con `sessions=0` indica en qué paso
+faltan los datos.
+
 ### Diagnóstico de carga
 
 Cada fichero de `core/` hace un `print("Ledger: core/<fichero>.lua")`

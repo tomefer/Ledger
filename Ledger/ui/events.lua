@@ -180,7 +180,13 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         if arg1 == ADDON_NAME then
             LedgerDB = Ledger.InitDB(LedgerDB, Ledger.DEFAULTS)
             local wiped, oldVersion
+            -- Startup diagnostics (INFO, see /ldg log show): what the
+            -- client actually handed us from disk vs what we ended up
+            -- with, to catch a /reload that loses the level's sessions.
+            local onDisk = Ledger.SummarizeCharDB(LedgerCharDB)
             LedgerCharDB, wiped, oldVersion = Ledger.InitCharDB(LedgerCharDB)
+            Ledger.Log("info", string.format("ADDON_LOADED: LedgerCharDB from disk: %s | after init: %s | wiped=%s",
+                onDisk, Ledger.SummarizeCharDB(LedgerCharDB), tostring(wiped)))
             if wiped then
                 -- No migrations: data saved under another schema version is
                 -- wiped and tracking starts clean -- never silently. Held
