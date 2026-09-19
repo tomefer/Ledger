@@ -1361,20 +1361,33 @@ arriba:
     el futuro, debe loguear siempre con `geterrorhandler()(msg)` o
     equivalente, nunca descartar el error sin más.
 
-### Diagnóstico de arranque de `LedgerCharDB` (2026-09-19)
+### SavedVariables no se cargan en la beta (2026-09-19, bug abierto)
 
-Bug abierto: en la beta de WoW Forever, cada `/reload` o login abre una
-sesión NUEVA (`initialXP` = toda la xp del nivel, `t0` = el instante de la
-carga) y las sesiones anteriores del nivel desaparecen (ni en `sessions` ni
-en `levels`), aunque el `SavedVariables` guardado justo antes sí las
-contenía y un cliente simulado que carga ese mismo fichero las conserva.
-Sin causa conocida: no hay en el código ningún camino que vacíe `sessions`
-salvo `/ldg wipe confirm` y el cierre de nivel. Instrumentado, a nivel INFO
-(`/ldg log show`): `ADDON_LOADED` loguea el `LedgerCharDB` que entrega el
-cliente desde disco y el resultante tras `InitCharDB`
-(`Ledger.SummarizeCharDB`, `core/state_dump.lua`), y `StartTracking` dice si
-arranca en frío o reanuda. Qué línea sale con `sessions=0` indica en qué paso
-faltan los datos.
+En la beta de WoW Forever (build 1.60.1, interface 16001) **ni `LedgerCharDB`
+ni `LedgerDB` llegan desde disco al addon**, aunque las dos se escriben bien
+al hacer logout/`/reload`. Consecuencias observadas: cada carga abre una
+sesión nueva (`initialXP` = toda la xp del nivel, `t0` = instante de la
+carga) y las anteriores desaparecen; `ratePos` y demás ajustes de `LedgerDB`
+vuelven a los valores por defecto (por eso "se pierde" la barra tras un
+`/reload`: `barShown` vuelve a `false`). Evidencia: el log de un login
+completo con datos en disco daba `ADDON_LOADED: LedgerCharDB from disk:
+type=nil`; `ratePos` está en el guardado de las 17:27 y ya no en el de las
+17:44 (cuenta); en Classic Era la misma `t0` se conserva entre guardados
+consecutivos con los eventos creciendo, y en la beta nunca (también en
+versiones anteriores al refactor de migraciones y en otros personajes:
+Ruma-Sa, Basuko-Nazario). **No** es el borrado por versión (todos los
+guardados dicen `version = 9`; `wiped=false` en el log) ni el redibujado de
+la barra. Sin causa conocida: cliente que carga las SavedVariables tarde,
+o nunca, o `.toc` con `## Interface: 11509, 16001` mal interpretado.
+
+Instrumentado a nivel INFO (`/ldg log show`): `ADDON_LOADED` (desde disco y
+tras `InitCharDB`, `Ledger.SummarizeCharDB`), `StartTracking` (reanuda o
+arranque en frío) y `SVState[...]` (`ui/events.lua:
+LogSavedVariablesState`) en `ADDON_LOADED`, `PLAYER_LOGIN`,
+`PLAYER_ENTERING_WORLD`, +5s y +30s: dirección de cada tabla (una
+sustitución tardía se vería como otra dirección), claves de `LedgerDB`,
+resumen de `LedgerCharDB` y lo que el cliente ha leído de las líneas
+`SavedVariables*` del `.toc`.
 
 ### Diagnóstico de carga
 

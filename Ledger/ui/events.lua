@@ -165,6 +165,29 @@ end
 -- Events
 ----------------------------------------------------------------------
 
+-- SavedVariables diagnostics (INFO, see /ldg log show). On the WoW Forever
+-- beta neither LedgerDB nor LedgerCharDB arrive from disk at ADDON_LOADED
+-- although both get written at logout (Classic Era loads them fine): this
+-- records what each global looks like at several points of the startup
+-- and what the client parsed from the .toc's SavedVariables lines, to
+-- tell "never loaded" from "loaded late". `tostring(table)` is the
+-- table's address, so a later replacement of the global shows as a
+-- different one.
+local function LogSavedVariablesState(where)
+    local getter = (C_AddOns and C_AddOns.GetAddOnMetadata) or GetAddOnMetadata
+    local function meta(field) return getter and tostring(getter(ADDON_NAME, field)) or "?" end
+    local dbKeys = 0
+    if type(LedgerDB) == "table" then
+        for _ in pairs(LedgerDB) do dbKeys = dbKeys + 1 end
+    end
+    Ledger.Log("info", string.format(
+        "SVState[%s]: LedgerDB=%s keys=%d ratePos=%s | LedgerCharDB=%s %s | toc SavedVariables=%s PerCharacter=%s",
+        where, tostring(LedgerDB), dbKeys,
+        type(LedgerDB) == "table" and tostring(LedgerDB.ratePos ~= nil) or "n/a",
+        tostring(LedgerCharDB), Ledger.SummarizeCharDB(LedgerCharDB),
+        meta("SavedVariables"), meta("SavedVariablesPerCharacter")))
+end
+
 local wipeNotice -- set on ADDON_LOADED when saved data of another version was wiped
 
 local ev = CreateFrame("Frame")
@@ -178,6 +201,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
     if event == "ADDON_LOADED" then
         -- SavedVariables are already loaded by the time our own name arrives.
         if arg1 == ADDON_NAME then
+            LogSavedVariablesState("ADDON_LOADED, from disk")
             LedgerDB = Ledger.InitDB(LedgerDB, Ledger.DEFAULTS)
             local wiped, oldVersion
             -- Startup diagnostics (INFO, see /ldg log show): what the
@@ -199,6 +223,11 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         end
 
     elseif event == "PLAYER_LOGIN" then
+        LogSavedVariablesState("PLAYER_LOGIN")
+        if C_Timer and C_Timer.After then
+            C_Timer.After(5,  function() LogSavedVariablesState("+5s") end)
+            C_Timer.After(30, function() LogSavedVariablesState("+30s") end)
+        end
         Ledger.RestorePosition()
         Ledger.UpdateRestedLabel()
         if LedgerDB.shown then
@@ -225,6 +254,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
 
     elseif event == "PLAYER_ENTERING_WORLD" then
         -- Login and every loading screen (zone, instance, resurrection).
+        LogSavedVariablesState("PLAYER_ENTERING_WORLD")
         Ledger.UpdateXP()
         -- Safety net: if the native bar didn't have its final width yet
         -- at PLAYER_LOGIN, it does by now -- also covers
