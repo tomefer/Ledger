@@ -130,20 +130,21 @@ function Ledger.AddAmount(matcher, t, xp, log, crossing)
     log("trace", string.format("AddAmount t=%.3f xp=%d -- %s",
         t, xp, DescribeQueue(matcher.sources, t, "sources")))
 
-    -- Quantity match first, ignoring the time gap entirely: a
-    -- QUEST_TURNED_IN's expectedXP is exact, so if it matches this
-    -- delta there's no ambiguity to break by proximity, however many
-    -- milliseconds (or seconds, within questGap -- see Flush) separate
+    -- Quantity match first, ignoring the time gap entirely: a source
+    -- that reports its own amount (QUEST_TURNED_IN, or an area-discovery
+    -- message) is exact, so if it matches this delta there's no
+    -- ambiguity to break by proximity, however many milliseconds (or
+    -- seconds, within the source's retention -- see Flush) separate
     -- them. Only then falls through to the FIFO/temporal rule below,
-    -- which is what kills and real exploration still rely on.
-    local questSource = PopFirstMatch(matcher.sources, function(item)
-        return item.src == "quest" and item.expectedXP == xp
+    -- which is what kills still rely on.
+    local exactSource = PopFirstMatch(matcher.sources, function(item)
+        return item.expectedXP == xp
     end)
-    if questSource then
+    if exactSource then
         log("trace", string.format(
-            "AddAmount: quest source expectedXP=%d matches xp=%d exactly (gap %.3fs, ignored) -> paired",
-            questSource.expectedXP, xp, t - questSource.t))
-        return { t = t, xp = xp, src = questSource.src, rested = questSource.rested, expectedXP = questSource.expectedXP, crossing = crossing }
+            "AddAmount: %s source expectedXP=%d matches xp=%d exactly (gap %.3fs, ignored) -> paired",
+            exactSource.src, exactSource.expectedXP, xp, t - exactSource.t))
+        return { t = t, xp = xp, src = exactSource.src, rested = exactSource.rested, expectedXP = exactSource.expectedXP, crossing = crossing }
     end
 
     local source = PopClosest(matcher.sources, t, matcher.maxGap, SourceRank)
@@ -177,17 +178,17 @@ function Ledger.AddSource(matcher, t, src, log, rested, expectedXP)
     log("trace", string.format("AddSource t=%.3f src=%s rested=%d expectedXP=%s -- %s",
         t, src, rested, tostring(expectedXP), DescribeQueue(matcher.amounts, t, "amounts")))
 
-    -- Symmetric to AddAmount's quantity match: a quest source with a
-    -- known expectedXP pairs with a pending amount of that exact
-    -- value regardless of the time gap between them.
-    if src == "quest" and expectedXP then
+    -- Symmetric to AddAmount's quantity match: a source with a known
+    -- expectedXP (quest, exploration) pairs with a pending amount of
+    -- that exact value regardless of the time gap between them.
+    if expectedXP then
         local amount = PopFirstMatch(matcher.amounts, function(item)
             return item.xp == expectedXP
         end)
         if amount then
             log("trace", string.format(
-                "AddSource: quest expectedXP=%d matches pending amount xp=%d exactly (gap %.3fs, ignored) -> paired",
-                expectedXP, amount.xp, t - amount.t))
+                "AddSource: %s expectedXP=%d matches pending amount xp=%d exactly (gap %.3fs, ignored) -> paired",
+                src, expectedXP, amount.xp, t - amount.t))
             return { t = amount.t, xp = amount.xp, src = src, rested = rested, expectedXP = expectedXP, crossing = amount.crossing }
         end
     end

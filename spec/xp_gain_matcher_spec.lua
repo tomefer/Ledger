@@ -215,6 +215,47 @@ describe("core/xp_gain_matcher.lua", function()
         end)
     end)
 
+    describe("area-discovery source matched by exact expectedXP", function()
+        it("the amount arrives first and no combat source ever does (real case: a cave, 70 xp)", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddAmount(m, 100.0, 70)
+
+            local paired = Ledger.AddSource(m, 100.05, "explore", nil, 0, 70)
+
+            assert.are.same({ t = 100.0, xp = 70, src = "explore", rested = 0, expectedXP = 70 }, paired)
+        end)
+
+        it("the source arrives first", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddSource(m, 100.0, "explore", nil, 0, 70)
+
+            local paired = Ledger.AddAmount(m, 100.05, 70)
+
+            assert.are.same({ t = 100.05, xp = 70, src = "explore", rested = 0, expectedXP = 70 }, paired)
+        end)
+
+        it("a kill landing at the same time doesn't steal it: the amount matching the discovery's value pairs with it", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddSource(m, 100.0, "explore", nil, 0, 70)
+            Ledger.AddSource(m, 100.04, "kill") -- closer in time than the discovery
+
+            local paired = Ledger.AddAmount(m, 100.05, 70)
+
+            assert.are.equal("explore", paired.src)
+            assert.are.equal(1, #m.sources) -- the kill is still waiting for its own amount
+        end)
+
+        it("an amount that doesn't match the discovery's value still pairs by proximity as before", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddSource(m, 100.0, "explore", nil, 0, 70)
+
+            local paired = Ledger.AddAmount(m, 100.05, 65)
+
+            assert.are.equal("explore", paired.src)
+            assert.are.equal(70, paired.expectedXP) -- EmitEvent logs the discrepancy
+        end)
+    end)
+
     describe("quest matched by exact expectedXP, not by proximity (in-game fix, 2026-09-18)", function()
         it("pairs a quest by exact amount even with a gap well past MAX_MATCH_GAP", function()
             local m = Ledger.NewMatcher(1) -- maxGap=1, questGap defaults to 3

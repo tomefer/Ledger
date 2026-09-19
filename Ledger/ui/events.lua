@@ -87,6 +87,12 @@ SlashCmdList["LEDGER"] = function(msg)
         Print(Ledger.FormatXPGainStrings(Ledger.xpGainStrings))
         Print("Rested-bonus suffix (unconfirmed in-game, see CLAUDE.md):")
         Print(Ledger.FormatXPGainStrings(Ledger.restedStrings))
+        Print("Area-discovery message (CHAT_MSG_SYSTEM, unconfirmed in-game, see CLAUDE.md):")
+        if #Ledger.exploreStrings == 0 then
+            Print("ERR_ZONE_EXPLORED_XP not found in this client")
+        else
+            Print(Ledger.FormatXPGainStrings(Ledger.exploreStrings))
+        end
 
     elseif command == "rested" then
         LedgerDB.includeRested = not LedgerDB.includeRested

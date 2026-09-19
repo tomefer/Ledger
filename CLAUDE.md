@@ -60,7 +60,7 @@ vez de suponer.
     (abre `ui/debug_frame.lua` en modo "log" en vez de "state").
   - `/ldg log chat`: activa o desactiva el eco del log al chat.
   - `/ldg strings`: imprime los global strings de xp en uso (patrón
-    principal y sufijo de bono por descanso) con su valor literal en
+    principal, sufijo de bono por descanso y mensaje de descubrimiento de zona) con su valor literal en
     este cliente (`core/chat_patterns.lua: Ledger.FormatXPGainStrings`).
   - `/ldg rested`: alterna `LedgerDB.includeRested` (si el bono por
     descanso cuenta en `TotalXP`/`CloseLevel`; ver "Series declarativas"
@@ -517,6 +517,24 @@ nunca por orden de inserción: si el addon se instala a mitad de partida
     la encuentra, el mensaje se descarta sin encolarse como fuente
     competidora, porque ya sabemos que la fuente real de esa xp es la
     quest. Todo TRACE (`ExploreCheck: ...`).
+- **Exploración: mensaje de sistema, no de combate** (log real
+  2026-09-19: una cueva dio 70 de xp y no llegó NINGÚN
+  `CHAT_MSG_COMBAT_XP_GAIN`, así que la cantidad se soltó como
+  `"unknown"`): el descubrimiento de zona se anuncia por
+  `CHAT_MSG_SYSTEM` con `ERR_ZONE_EXPLORED_XP` ("Discovered %s: %d
+  experience gained"). `ui/xp_capture.lua` construye su patrón al cargar
+  (`Ledger.exploreStrings`, mismo `Ledger.BuildPattern` que los demás),
+  `Ledger.ExtractExploreXP` (`core/chat_patterns.lua`, pura) saca la
+  cantidad (último grupo: el nombre del área va antes) y se encola como
+  fuente `"explore"` con esa cantidad como `expectedXP`, igual que una
+  quest. Por eso el emparejamiento por cantidad exacta de `AddAmount`/
+  `AddSource` ya no mira `src == "quest"`: vale para cualquier fuente con
+  `expectedXP` (una muerte simultánea no le roba la xp a la exploración).
+  `ERR_ZONE_EXPLORED` (sin xp, nivel máximo) no se usa: no hay cantidad que
+  emparejar. **Sin confirmar en el juego**: que sea `CHAT_MSG_SYSTEM` en
+  ambos clientes — cada mensaje de sistema se loguea a TRACE
+  (`CHAT_MSG_SYSTEM ... area discovery` / `... ignored`) y `/ldg strings`
+  imprime el global string.
 - **Instrumentación de diagnóstico (ver más abajo, "Sistema de log")**:
   todo el flujo anterior (eventos crudos, intentos de casado con sus
   capturas, bono por descanso detectado, estado de la cola de

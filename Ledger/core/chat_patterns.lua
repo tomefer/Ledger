@@ -91,6 +91,24 @@ function Ledger.ExtractRestedBonus(entries, msg)
     return 0
 end
 
+-- Looks for an area-discovery message ("Discovered %s: %d experience
+-- gained", ERR_ZONE_EXPLORED_XP) in `msg`, trying each entry of
+-- `entries` (in order; {name=, text=, pattern=} with a pattern from
+-- BuildPattern). Exploration xp does NOT arrive through
+-- CHAT_MSG_COMBAT_XP_GAIN: it's a system message, so this is the only
+-- signal that tells exploration apart from an unknown xp gain. Returns
+-- the captured xp amount (the LAST capture: the area name comes first)
+-- or nil if nothing matches. Pure logic: does not touch any WoW API.
+function Ledger.ExtractExploreXP(entries, msg)
+    for _, entry in ipairs(entries or {}) do
+        local results = { msg:match(entry.pattern) }
+        if #results > 0 then
+            return tonumber(results[#results])
+        end
+    end
+    return nil
+end
+
 -- Formats the list of xp global strings in use (see ui/xp_capture.lua:
 -- each entry is { name=, text=, pattern= }) for /ldg strings: the
 -- global string's name, its literal value in this client and the

@@ -60,6 +60,23 @@ for key, value in pairs(_G) do
 end
 Ledger.restedStrings = restedStrings
 
+-- Area-discovery xp ("Discovered %s: %d experience gained") is announced
+-- as a SYSTEM message, never as CHAT_MSG_COMBAT_XP_GAIN (confirmed from
+-- a real log: a cave's 70 xp produced no combat-xp event at all and got
+-- released as "unknown"). Built from the client's own global strings
+-- like the two families above; ERR_ZONE_EXPLORED (no xp, max level) is
+-- deliberately not included -- there's no amount to pair. UNCONFIRMED
+-- IN-GAME that the event is CHAT_MSG_SYSTEM on both clients: every
+-- system message is TRACE-logged (see the handler) to check.
+local exploreStrings = {}
+for _, name in ipairs({ "ERR_ZONE_EXPLORED_XP" }) do
+    local value = _G[name]
+    if type(value) == "string" then
+        table.insert(exploreStrings, { name = name, text = value, pattern = Ledger.BuildPattern(value) })
+    end
+end
+Ledger.exploreStrings = exploreStrings
+
 -- Classifies the message (core/chat_patterns.lua: Ledger.ClassifyXPGainMatch,
 -- pure logic) and logs every variant tried at TRACE level (matched or
 -- not, and what it captured if it matched), plus the resulting final
@@ -402,6 +419,7 @@ ev:RegisterEvent("PLAYER_ENTERING_WORLD")
 ev:RegisterEvent("PLAYER_XP_UPDATE")
 ev:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
 ev:RegisterEvent("QUEST_TURNED_IN")
+ev:RegisterEvent("CHAT_MSG_SYSTEM")
 ev:RegisterEvent("PLAYER_LEVEL_UP")
 ev:RegisterEvent("PLAYER_DEAD")
 ev:RegisterEvent("TIME_PLAYED_MSG")
@@ -470,6 +488,23 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         else
             local paired = Ledger.AddSource(matcher, t, category, Ledger.Log, rested)
             if paired then EmitEvent(paired) end
+        end
+
+    elseif event == "CHAT_MSG_SYSTEM" then
+        -- Area discovery: queued as an "explore" source carrying the
+        -- amount the message reports (expectedXP), so it pairs with the
+        -- UnitXP delta by exact value like a quest does and EmitEvent
+        -- cross-checks the two. Everything else that comes through here
+        -- is only TRACE-logged, to confirm the event carries what we
+        -- assume.
+        local exploreXP = Ledger.ExtractExploreXP(exploreStrings, arg1)
+        if exploreXP then
+            Ledger.Log("trace", string.format(
+                "CHAT_MSG_SYSTEM t=%.3f area discovery xp=%d msg=<<%s>>", t, exploreXP, tostring(arg1)))
+            local paired = Ledger.AddSource(matcher, t, "explore", Ledger.Log, 0, exploreXP)
+            if paired then EmitEvent(paired) end
+        else
+            Ledger.Log("trace", string.format("CHAT_MSG_SYSTEM t=%.3f ignored msg=<<%s>>", t, tostring(arg1)))
         end
 
     elseif event == "QUEST_TURNED_IN" then

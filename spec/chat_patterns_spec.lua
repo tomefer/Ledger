@@ -165,6 +165,33 @@ describe("core/chat_patterns.lua", function()
         end)
     end)
 
+    describe("ExtractExploreXP", function()
+        local entries
+
+        before_each(function()
+            local text = "Discovered %s: %d experience gained"
+            entries = { { name = "ERR_ZONE_EXPLORED_XP", text = text, pattern = Ledger.BuildPattern(text) } }
+        end)
+
+        it("returns the xp of an area-discovery message (real case: a cave, 70 xp)", function()
+            assert.are.equal(70, Ledger.ExtractExploreXP(entries, "Discovered Wailing Caverns: 70 experience gained"))
+        end)
+
+        it("takes the amount, not the area name, even if the name has digits or colons", function()
+            assert.are.equal(45, Ledger.ExtractExploreXP(entries, "Discovered Area 52: East: 45 experience gained"))
+        end)
+
+        it("returns nil for any other system message", function()
+            assert.is_nil(Ledger.ExtractExploreXP(entries, "Tomef has come online."))
+            assert.is_nil(Ledger.ExtractExploreXP(entries, "You gain 45 experience."))
+        end)
+
+        it("returns nil when there are no entries at all", function()
+            assert.is_nil(Ledger.ExtractExploreXP({}, "Discovered X: 70 experience gained"))
+            assert.is_nil(Ledger.ExtractExploreXP(nil, "Discovered X: 70 experience gained"))
+        end)
+    end)
+
     describe("FormatXPGainStrings", function()
         it("indicates when there is no global string at all", function()
             local text = Ledger.FormatXPGainStrings({})
