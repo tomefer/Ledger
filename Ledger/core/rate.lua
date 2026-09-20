@@ -44,6 +44,26 @@ local function AddThousandsSeparator(numStr)
     end
     return formatted
 end
+-- Shared with core/bar_hover.lua (the xp label shown on hover).
+Ledger.AddThousandsSeparator = AddThousandsSeparator
+
+-- Formats an amount of SAMPLED time (activity samples, one per second --
+-- see the header) for the rate panel: "45s", "12m 05s", "1h 23m" (from
+-- an hour up the seconds are noise and are dropped). nil -> "-".
+function Ledger.FormatDuration(seconds)
+    if not seconds then
+        return "-"
+    end
+    local total = math.max(math.floor(seconds), 0)
+    local hours   = math.floor(total / 3600)
+    local minutes = math.floor((total % 3600) / 60)
+    if hours > 0 then
+        return string.format("%dh %02dm", hours, minutes)
+    elseif minutes > 0 then
+        return string.format("%dm %02ds", minutes, total % 60)
+    end
+    return string.format("%ds", total)
+end
 
 -- Formats an xp/hour rate for display: a thousands-separated integer
 -- with the "xp/h" suffix, or "-" if rate is nil (see
@@ -66,8 +86,10 @@ end
 -- core/ticks.lua). includeRested is forwarded to
 -- Ledger.TotalXP/TotalXPAcrossSessions for both numbers: same toggle,
 -- same meaning, for the session's own rate and the level's.
--- Returns { sessionRate=, levelRate= }, each a number or nil (see
--- Ledger.ComputeXPRate).
+-- Returns { sessionRate=, levelRate=, sessionSamples=, levelSamples= }:
+-- the rates are each a number or nil (see Ledger.ComputeXPRate); the
+-- sample counts are passed through so the panel can show the sampled
+-- time (Ledger.BuildRatePanelSections) from the same snapshot.
 function Ledger.ComputeHeadlineRates(session, levelSessions, sessionSamples, levelSamples, includeRested)
     local sessionXP = session and Ledger.TotalXP(session, includeRested) or 0
     local levelXP    = Ledger.TotalXPAcrossSessions(levelSessions or {}, includeRested)
@@ -75,6 +97,8 @@ function Ledger.ComputeHeadlineRates(session, levelSessions, sessionSamples, lev
     return {
         sessionRate = Ledger.ComputeXPRate(sessionXP, sessionSamples),
         levelRate   = Ledger.ComputeXPRate(levelXP, levelSamples),
+        sessionSamples = sessionSamples,
+        levelSamples   = levelSamples,
     }
 end
 
@@ -86,9 +110,11 @@ end
 -- never depending on anything ui/ defines.
 Ledger.RATE_HIGHLIGHT_COLOR = { 1, 1, 1 }       -- white: the session rate, same number as the headline
 Ledger.RATE_DEFAULT_COLOR   = { 0.8, 0.8, 0.8 } -- light gray: everything else
+Ledger.RATE_NOTE_COLOR      = { 0.6, 0.6, 0.6 } -- dimmer gray: explanatory notes under a section
 
 -- Builds the hover panel's content as a list of sections:
--- { { title=, rows = { { label=, value=, color= }, ... } }, ... }.
+-- { { title=, rows = { { label=, value=, color= }, ... }, notes = { "line", ... } }, ... }
+-- (notes is optional: plain explanatory lines shown under the rows).
 -- Adding a new section later (level history, per-source breakdown...)
 -- is just appending another { title=, rows=... } entry here -- the ui/
 -- layer (ui/rate_frame.lua) only ever walks this generic shape, never
@@ -96,7 +122,7 @@ Ledger.RATE_DEFAULT_COLOR   = { 0.8, 0.8, 0.8 } -- light gray: everything else
 -- each one has.
 function Ledger.BuildRatePanelSections(rates)
     rates = rates or {}
-    return {
+    local sections = {
         {
             title = "XP/hour",
             rows = {
@@ -105,4 +131,25 @@ function Ledger.BuildRatePanelSections(rates)
             },
         },
     }
+
+    -- Sampled time of the session and the level, from the same sample
+    -- counts that are the rate's denominator. It is what the addon
+    -- observed, not the real played time, so the section says so -- a
+    -- difference with /played or the clock is expected (the sampler only
+    -- runs while the client does), not a fault.
+    if rates.sessionSamples ~= nil or rates.levelSamples ~= nil then
+        sections[#sections + 1] = {
+            title = "Sampled time",
+            rows = {
+                { label = "This session", value = Ledger.FormatDuration(rates.sessionSamples), color = Ledger.RATE_DEFAULT_COLOR },
+                { label = "This level",   value = Ledger.FormatDuration(rates.levelSamples),   color = Ledger.RATE_DEFAULT_COLOR },
+            },
+            notes = {
+                "Time sampled by the addon;",
+                "it may differ from the real played time.",
+            },
+        }
+    end
+
+    return sections
 end

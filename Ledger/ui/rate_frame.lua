@@ -142,6 +142,9 @@ local function RenderHoverPanel(sections)
         for _, row in ipairs(section.rows) do
             PlaceLine(string.format("%s: %s", row.label, row.value), row.color or Ledger.RATE_DEFAULT_COLOR)
         end
+        for _, note in ipairs(section.notes or {}) do
+            PlaceLine(note, Ledger.RATE_NOTE_COLOR)
+        end
     end
 
     for i = lineIndex + 1, #linePool do

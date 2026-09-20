@@ -184,5 +184,78 @@ describe("core/rate.lua", function()
 
             assert.are.equal("-", sections[1].rows[1].value)
         end)
+
+        it("no sample counts in rates: no time section (only the rate one)", function()
+            assert.are.equal(1, #Ledger.BuildRatePanelSections({ sessionRate = 1, levelRate = 2 }))
+        end)
+
+        describe("sampled time section", function()
+            local function timeSection(rates)
+                local sections = Ledger.BuildRatePanelSections(rates)
+                assert.are.equal(2, #sections)
+                return sections[2]
+            end
+
+            it("comes after the rate section, with the session's and the level's time", function()
+                local section = timeSection({ sessionRate = 1, levelRate = 2, sessionSamples = 725, levelSamples = 5025 })
+
+                assert.are.equal("Sampled time", section.title)
+                assert.are.equal("This session", section.rows[1].label)
+                assert.are.equal("12m 05s", section.rows[1].value)
+                assert.are.equal("This level", section.rows[2].label)
+                assert.are.equal("1h 23m", section.rows[2].value)
+            end)
+
+            it("says the time is sampled by the addon and may differ from the played time, without calling it an error", function()
+                local section = timeSection({ sessionSamples = 10, levelSamples = 10 })
+                local text = table.concat(section.notes, " ")
+
+                assert.is_truthy(text:find("sampled by the addon", 1, true))
+                assert.is_truthy(text:find("differ from the real played time", 1, true))
+                assert.is_nil(text:lower():find("error", 1, true))
+            end)
+
+            it("a missing count shows a dash instead of a made-up time", function()
+                local section = timeSection({ sessionSamples = 90, levelSamples = nil })
+
+                assert.are.equal("1m 30s", section.rows[1].value)
+                assert.are.equal("-", section.rows[2].value)
+            end)
+        end)
+    end)
+
+    describe("ComputeHeadlineRates: sample counts", function()
+        it("passes the sample counts through, even when they are too few for a rate", function()
+            local session = Ledger.NewSession(0, 5, nil, false)
+            local rates = Ledger.ComputeHeadlineRates(session, { session }, 30, 3600, true)
+
+            assert.are.equal(30, rates.sessionSamples)
+            assert.are.equal(3600, rates.levelSamples)
+            assert.is_nil(rates.sessionRate)
+        end)
+    end)
+
+    describe("FormatDuration", function()
+        it("seconds under a minute", function()
+            assert.are.equal("0s", Ledger.FormatDuration(0))
+            assert.are.equal("45s", Ledger.FormatDuration(45))
+        end)
+
+        it("minutes and zero-padded seconds under an hour", function()
+            assert.are.equal("1m 00s", Ledger.FormatDuration(60))
+            assert.are.equal("12m 05s", Ledger.FormatDuration(725))
+            assert.are.equal("59m 59s", Ledger.FormatDuration(3599))
+        end)
+
+        it("hours and zero-padded minutes from an hour up (seconds dropped)", function()
+            assert.are.equal("1h 00m", Ledger.FormatDuration(3600))
+            assert.are.equal("1h 23m", Ledger.FormatDuration(5025))
+            assert.are.equal("100h 00m", Ledger.FormatDuration(360000))
+        end)
+
+        it("nil is a dash, negative clamps to zero", function()
+            assert.are.equal("-", Ledger.FormatDuration(nil))
+            assert.are.equal("0s", Ledger.FormatDuration(-5))
+        end)
     end)
 end)
