@@ -8,6 +8,11 @@
 -- "xp per hour of time the addon actually observed" (time with the
 -- client not running is not in it, by design). Samples are received as
 -- a parameter.
+--
+-- The "Played time" section of the hover panel is a separate, DISPLAY-ONLY
+-- concern: exact clocks (session: now - t0; level: the server's /played
+-- reading plus the time elapsed since it arrived), never derived from the
+-- samples and never feeding the rate or any other metric nor persisted.
 
 local ADDON_NAME, Ledger = ...
 
@@ -47,9 +52,9 @@ end
 -- Shared with core/bar_hover.lua (the xp label shown on hover).
 Ledger.AddThousandsSeparator = AddThousandsSeparator
 
--- Formats an amount of SAMPLED time (activity samples, one per second --
--- see the header) for the rate panel: "45s", "12m 05s", "1h 23m" (from
--- an hour up the seconds are noise and are dropped). nil -> "-".
+-- Formats a duration in seconds for the rate panel: "45s", "12m 05s",
+-- "1h 23m" (from an hour up the seconds are noise and are dropped).
+-- nil -> "-".
 function Ledger.FormatDuration(seconds)
     if not seconds then
         return "-"
@@ -63,6 +68,41 @@ function Ledger.FormatDuration(seconds)
         return string.format("%dm %02ds", minutes, total % 60)
     end
     return string.format("%ds", total)
+end
+
+-- Played time of the SESSION: exact, now - session.t0 (both absolute
+-- time()). nil if there is no session or it has no t0; never negative
+-- (a clock adjustment must not show a negative duration).
+function Ledger.SessionPlayedSeconds(session, now)
+    if not session or not session.t0 or not now then
+        return nil
+    end
+    return math.max(now - session.t0, 0)
+end
+
+-- The last TIME_PLAYED_MSG reading, kept IN MEMORY ONLY (never in
+-- LedgerCharDB) together with the level it belongs to and the absolute
+-- time() at which it arrived: { level=, seconds=, receivedAt= }. Every
+-- new reply builds a fresh ref that REPLACES the previous one -- never
+-- accumulated on top of it (a reply after a /reload already includes
+-- everything before). nil (no reading) if seconds is not a number.
+function Ledger.NewLevelPlayedRef(level, seconds, receivedAt)
+    if type(seconds) ~= "number" or not receivedAt then
+        return nil
+    end
+    return { level = level, seconds = seconds, receivedAt = receivedAt }
+end
+
+-- Played time of the LEVEL in progress: the server's reading plus the
+-- time elapsed since it arrived. nil (shown as a dash, never a 0) while
+-- no reply has arrived yet, or if the reading belongs to another level
+-- (the counter resets on a ding: until the new reply lands, the old
+-- level's time must not be shown as the new one's).
+function Ledger.LevelPlayedSeconds(ref, currentLevel, now)
+    if not ref or not now or ref.level ~= currentLevel then
+        return nil
+    end
+    return ref.seconds + math.max(now - ref.receivedAt, 0)
 end
 
 -- Formats an xp/hour rate for display: a thousands-separated integer
@@ -86,10 +126,8 @@ end
 -- core/ticks.lua). includeRested is forwarded to
 -- Ledger.TotalXP/TotalXPAcrossSessions for both numbers: same toggle,
 -- same meaning, for the session's own rate and the level's.
--- Returns { sessionRate=, levelRate=, sessionSamples=, levelSamples= }:
--- the rates are each a number or nil (see Ledger.ComputeXPRate); the
--- sample counts are passed through so the panel can show the sampled
--- time (Ledger.BuildRatePanelSections) from the same snapshot.
+-- Returns { sessionRate=, levelRate= }, each a number or nil (see
+-- Ledger.ComputeXPRate).
 function Ledger.ComputeHeadlineRates(session, levelSessions, sessionSamples, levelSamples, includeRested)
     local sessionXP = session and Ledger.TotalXP(session, includeRested) or 0
     local levelXP    = Ledger.TotalXPAcrossSessions(levelSessions or {}, includeRested)
@@ -97,8 +135,6 @@ function Ledger.ComputeHeadlineRates(session, levelSessions, sessionSamples, lev
     return {
         sessionRate = Ledger.ComputeXPRate(sessionXP, sessionSamples),
         levelRate   = Ledger.ComputeXPRate(levelXP, levelSamples),
-        sessionSamples = sessionSamples,
-        levelSamples   = levelSamples,
     }
 end
 
@@ -132,24 +168,17 @@ function Ledger.BuildRatePanelSections(rates)
         },
     }
 
-    -- Sampled time of the session and the level, from the same sample
-    -- counts that are the rate's denominator. It is what the addon
-    -- observed, not the real played time, so the section says so -- a
-    -- difference with /played or the clock is expected (the sampler only
-    -- runs while the client does), not a fault.
-    if rates.sessionSamples ~= nil or rates.levelSamples ~= nil then
-        sections[#sections + 1] = {
-            title = "Sampled time",
-            rows = {
-                { label = "This session", value = Ledger.FormatDuration(rates.sessionSamples), color = Ledger.RATE_DEFAULT_COLOR },
-                { label = "This level",   value = Ledger.FormatDuration(rates.levelSamples),   color = Ledger.RATE_DEFAULT_COLOR },
-            },
-            notes = {
-                "Time sampled by the addon;",
-                "it may differ from the real played time.",
-            },
-        }
-    end
+    -- Played time of the session and the level: exact clocks, display
+    -- only (rates.sessionPlayed / rates.levelPlayed, seconds or nil --
+    -- see Ledger.SessionPlayedSeconds / Ledger.LevelPlayedSeconds). A nil
+    -- (level reading not received yet) is a dash, never a made-up 0.
+    sections[#sections + 1] = {
+        title = "Played time",
+        rows = {
+            { label = "This session", value = Ledger.FormatDuration(rates.sessionPlayed), color = Ledger.RATE_DEFAULT_COLOR },
+            { label = "This level",   value = Ledger.FormatDuration(rates.levelPlayed),   color = Ledger.RATE_DEFAULT_COLOR },
+        },
+    }
 
     return sections
 end
