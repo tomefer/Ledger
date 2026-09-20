@@ -117,6 +117,14 @@ SlashCmdList["LEDGER"] = function(msg)
             Print(string.format("xp composition bar: shown (width=%dpx, %d segments)", width, segmentCount))
         end
 
+    elseif command == "native" then
+        local replacing, info = Ledger.ToggleReplaceNative()
+        if replacing then
+            Print("xp bar replaces the native one: native fill " .. info.status .. " (" .. info.detail .. ")")
+        else
+            Print("native xp bar restored (fill " .. info.status .. "); the composition bar sits above it. /ldg native to replace it again")
+        end
+
     elseif command == "time" then
         local shown = Ledger.ToggleTimeBar()
         Print("activity bar: " .. (shown and "shown" or "hidden"))

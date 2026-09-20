@@ -123,6 +123,28 @@ describe("core/probe.lua", function()
         end)
     end)
 
+    describe("FormatProbe: native xp bar fill", function()
+        it("reports not resolved yet when nil", function()
+            local text = Ledger.FormatProbe({})
+            assert.is_not_nil(text:find("Native xp bar fill: not resolved yet", 1, true))
+        end)
+
+        it("reports a hidden fill with where it was found", function()
+            local text = Ledger.FormatProbe({
+                nativeFill = { status = "hidden", detail = "MainStatusTrackingBarContainer (matched child)" },
+            })
+            assert.is_not_nil(text:find(
+                "Native xp bar fill: hidden (MainStatusTrackingBarContainer (matched child))", 1, true))
+        end)
+
+        it("reports the overlay-only degradation with its reason", function()
+            local text = Ledger.FormatProbe({
+                nativeFill = { status = "overlay only", detail = "no StatusBar with the xp range (child1[Frame max=1])" },
+            })
+            assert.is_not_nil(text:find("Native xp bar fill: overlay only (no StatusBar with the xp range", 1, true))
+        end)
+    end)
+
     describe("FormatProbe: no data at all", function()
         it("nil data doesn't blow up and reports everything absent/empty", function()
             local text = Ledger.FormatProbe(nil)

@@ -72,11 +72,18 @@ vez de suponer.
     alternando igual y guardan la elección, que manda en el siguiente
     login.
   - `/ldg bar`: muestra u oculta la barra de composición de xp del
-    nivel, anclada sobre la barra de xp nativa (ver "Barra de
+    nivel, que ocupa el sitio de la barra de xp nativa (ver "Barra de
     composición de xp" más abajo). Informa directamente por chat de si
     se ha podido anclar y cuántos segmentos hay (sin depender de que el
     log esté activo): si no hay ninguno todavía es que no hay xp
     registrada en el nivel actual, no un fallo.
+  - `/ldg native`: alterna `LedgerDB.replaceNative` (`true` por defecto):
+    con él apagado la barra de xp nativa recupera su relleno y la barra de
+    composición vuelve a ponerse ENCIMA de ella (1px de hueco, altura
+    `barHeight`) — la salida de emergencia si algo falla al sustituirla.
+    Informa por chat de qué pasó con el relleno nativo (`hidden` /
+    `overlay only` con el motivo / `visible`). Ocultar la barra de
+    composición con `/ldg bar` también devuelve el relleno nativo.
   - `/ldg time`: muestra u oculta la barra de actividad del nivel
     (combat/non-combat/travel/dead, siempre en porcentaje de muestras),
     independiente de `/ldg bar` (ver "Barra de actividad" más abajo).
@@ -312,7 +319,12 @@ nivel siguen contando a través del reset.
 **Se muestra siempre en PORCENTAJE** (`Ledger.TickPercent(ticks, clave)` =
 `ticks[clave] / ticks.total * 100`, 0 si no hay muestras): sobre el total
 de muestras del nivel o de la sesión. Nunca en valores absolutos, para no
-invitar a cuadrarlos con nada externo (el `/played`, el reloj). Un
+invitar a cuadrarlos con nada externo (el `/played`, el reloj). **Única
+excepción, pedida a propósito**: el panel del número de xp/hora
+(`/ldg rate`) muestra el tiempo muestreado de la sesión y del nivel
+(`Ledger.FormatDuration(muestras)`, ver "Número principal de xp/hora"),
+rotulado como tiempo muestreado por el addon que puede no coincidir con
+el jugado real; ni las barras ni sus tooltips lo muestran. Un
 porcentaje se deriva al mostrar y NUNCA se persiste. Formateadores puros:
 `Ledger.FormatTickLines` (una línea por actividad, para la barra) y
 `Ledger.FormatTickSummary` (una línea, para `/ldg dump` y `/ldg check`).
@@ -664,10 +676,50 @@ Lo único que queda de `/played`:
 
 ### Barra de composición de xp (`core/xp_bar.lua` + `ui/xp_bar.lua`, `/ldg bar`)
 
-Barra de segmentos anclada justo encima de la barra de xp nativa, un
-color por tramo de `src`, que representa de qué vino la xp del nivel
-actual. Eje X: 0 a `UnitXPMax("player")`, mismo ancho y misma posición
-horizontal que la barra nativa (`ui/xp_bar.lua: AnchorToNativeBar`).
+Barra de segmentos que **sustituye visualmente a la barra de xp nativa**
+(`LedgerDB.replaceNative`, `true` por defecto), un color por tramo de
+`src`, que representa de qué vino la xp del nivel actual. Eje X: 0 a
+`UnitXPMax("player")`.
+
+- **Sustitución de la nativa** (`ui/xp_bar.lua: AnchorToNativeBar` +
+  `ApplyNativeFill`): el frame se ancla a las DOS esquinas de la barra
+  nativa resuelta (`TOPLEFT`/`BOTTOMRIGHT` sobre las suyas), así que
+  toma su posición y tamaño exactos y los sigue en vivo; toma su misma
+  `FrameStrata` y un `FrameLevel` 10 por encima, para dibujarse encima
+  y ganar el ratón. **Se oculta solo el relleno de la nativa, nunca su
+  contenedor** (su geometría es el ancla y la referencia de tamaño, y su
+  fondo/pista se queda): es la textura del `StatusBar` de la barra de xp
+  (`GetStatusBarTexture():SetAlpha(0)`), sin quitar, reparentar ni
+  enganchar nada, así que el código del sistema de barras de seguimiento
+  de Blizzard sigue funcionando igual y restaurar es devolver el alfa.
+  El `StatusBar` se busca sobre la barra resuelta, su `.StatusBar` y sus
+  hijos, y se identifica por rango (`GetMinMaxValues` == `UnitXPMax`,
+  como `FindMatchingChild`, para no coger la reputación). Cada paso está
+  en `pcall` y se verifica (el alfa tiene que quedar en 0). **Si no se
+  puede ocultar limpiamente, degrada a superponerse** (que es lo que ya
+  hace el frame por su nivel superior; la parte rellena de la nativa
+  queda tapada por los segmentos opacos) y deja el motivo — incluida la
+  descripción de con qué está construida la barra nativa — en
+  `Ledger.nativeFillInfo = { status=, detail= }` (`hidden` /
+  `overlay only` / `visible` / `n/a`), que lee `/ldg native` y
+  `/ldg probe` y se loguea a INFO cuando cambia. El relleno solo está
+  oculto mientras la barra de composición esté visible Y sustituyendo:
+  `OnShow`/`OnHide` y cada `RedrawXPBarFull` lo re-aplican (siempre
+  restaurando primero: idempotente).
+- **Altura**: en modo sustitución la del frame es la de la barra nativa;
+  los segmentos se anclan a los bordes superior e inferior del frame (no
+  copian su altura al pintar: al hacer login la nativa puede no tener aún
+  layout). `LedgerDB.barHeight` solo cuenta con `/ldg native` apagado y
+  para la barra de actividad.
+- **Sin ratón propio**: el ratón lo lleva la zona de hover única de
+  `ui/bars_hover.lua` (ver "Zona de hover unificada"), que reenvía el
+  arrastre del modo degradado (`Ledger.StartXPBarDrag`/`StopXPBarDrag`).
+  Tapar la nativa con esa zona anula sus tooltips nativos: es lo que
+  implica sustituirla.
+- **Label de xp al pasar el ratón** (`Ledger.ShowXPBarLabel`/
+  `HideXPBarLabel`): `"{xp actual} / {xp del nivel}"` (`Ledger.FormatXPLabel`,
+  pura, con separador de miles), centrado y en blanco sobre la barra, como
+  el texto de la nativa; no se muestra en nivel máximo.
 
 - **Fuente de datos: TODAS las sesiones del nivel, nunca solo la
   activa** — `Ledger.ConcatSeries(sessions, seriesDef)` (nuevo helper
@@ -718,13 +770,12 @@ horizontal que la barra nativa (`ui/xp_bar.lua: AnchorToNativeBar`).
   `Ledger.PALETTE` la usa el tooltip** (ver abajo) para las líneas del
   desglose por origen, así que barra y tooltip no pueden
   desincronizarse en el color de cada origen.
-- **Tooltip** (`ui/xp_bar.lua`, `frame:SetScript("OnEnter"/"OnLeave", ...)`,
-  nuevo — no existía ningún tooltip en el addon antes de esto): al pasar
-  el ratón por la barra, muestra el desglose de xp por origen
-  (`Ledger.XPBySourceAcrossSessions`, nuevo helper puro en
-  `core/events.lua` que suma `XPBySource` de varias sesiones — todas
-  las del nivel en curso, igual que la barra, nunca solo la activa) más
-  el total de bono por descanso si lo hay.
+- **Tooltip**: ya no es propio de la barra. Es la primera sección del
+  tooltip unificado de las dos barras (ver "Zona de hover unificada"):
+  el desglose de xp por origen (`Ledger.XPBySourceAcrossSessions`, helper
+  puro de `core/events.lua` que suma `XPBySource` de varias sesiones —
+  todas las del nivel en curso, igual que la barra, nunca solo la activa)
+  más el total de bono por descanso si lo hay.
 - **Borde**: 1px negro al 60% (`ui/xp_bar.lua: BORDER_COLOR`) alrededor
   de toda la barra, para separarla visualmente de la barra de xp nativa
   justo debajo — cuatro texturas finas en capa `OVERLAY` (por encima de
@@ -773,7 +824,8 @@ horizontal que la barra nativa (`ui/xp_bar.lua: AnchorToNativeBar`).
   redraw` lo confirmarían.
 - **Altura configurable**: `LedgerDB.barHeight` (`Ledger.DEFAULTS.barHeight
   = 8`), sin comando todavía para cambiarla (solo editando la
-  SavedVariable a mano).
+  SavedVariable a mano). Es la altura de la barra de actividad y la de
+  esta con `/ldg native` apagado; sustituyendo la nativa manda la de esta.
 - `/ldg bar` alterna `LedgerDB.barShown` y muestra/oculta el frame.
 
 **Localización de la barra nativa, multi-cliente** (`ui/xp_bar.lua:
@@ -820,9 +872,8 @@ solo cómo esa herramienta representa un frame sin nombre).
   `LedgerDB.barDefaultPos` al soltar) — nunca cuando está anclada de
   verdad: en ese caso arrastrar no serviría de nada, la próxima
   redibujada la volvería a pegar al ancla nativa, así que un flag local
-  (`inDegradedMode`, no `EnableMouse`: el ratón se queda siempre
-  activo, lo necesita el tooltip pase lo que pase) decide si
-  `OnDragStart` hace algo o no. Se avisa una única vez por sesión a
+  (`inDegradedMode`; el ratón lo lleva siempre la zona de hover, que
+  reenvía el arrastre) decide si `Ledger.StartXPBarDrag` hace algo o no. Se avisa una única vez por sesión a
   nivel INFO (`Ledger.Log("info", ...)`, nunca ERROR: es un modo
   soportado, no una rotura) la primera vez que se degrada.
 - **Nunca constantes**: tanto en modo nativo como degradado, la
@@ -857,7 +908,8 @@ solo cómo esa herramienta representa un frame sin nombre).
 ### Barra de actividad (`core/time_bar.lua` + `ui/time_bar.lua`, `/ldg time`)
 
 Paralela a la barra de composición de xp (mismo ancho y posición
-horizontal, misma altura, 2px de separación por encima), muestra cómo se
+horizontal, 2px de separación por encima, altura propia `barHeight` —
+la de xp ya es la de la barra nativa), muestra cómo se
 reparten las muestras del nivel actual entre las 4 actividades de
 `core/ticks.lua`. **Eje distinto al de la barra de xp**: aquí siempre
 ocupa el 100% del ancho (proporcional al total de muestras, no a un máximo
@@ -887,19 +939,55 @@ externo) — las dos barras no son comparables píxel a píxel.
   mismo ticker de 1s que muestrea la actividad** (`ui/xp_capture.lua:
   SampleTimeState`), **nunca desde los eventos de xp**: los tramos de
   viaje/no-combate/muerte no generan ningún evento de xp.
-- **Tooltip: solo porcentajes**, nunca tiempos absolutos.
-  `Ledger.FormatTickLines(ticks)` (pura) da una línea por actividad
-  (`"Combat: 42.3%"`); `ui/time_bar.lua` las pinta con `Ledger.PALETTE[clave]`
-  para el nivel y, debajo, para la sesión activa.
+- **Tooltip: solo porcentajes**, nunca tiempos absolutos, y ya no es
+  propio de la barra: son las secciones 2 y 3 del tooltip unificado (ver
+  "Zona de hover unificada"). `Ledger.FormatTickLines(ticks)` (pura) da
+  una línea por actividad (`"Combat: 42.3%"`), coloreada con
+  `Ledger.PALETTE[clave]`, para el nivel y, debajo, para la sesión activa.
 - `/ldg time` alterna `LedgerDB.timeBarShown` y muestra/oculta el frame —
   **independiente de `/ldg bar`**.
+
+### Zona de hover unificada (`core/bar_hover.lua` + `ui/bars_hover.lua`)
+
+**Una sola zona de ratón sobre las dos barras** (antes cada barra tenía su
+tooltip y había que afinar el ratón para distinguirlas). `LedgerBarsHover`
+es un frame sin dibujo que cubre desde la esquina inferior izquierda de la
+barra visible más baja hasta la superior derecha de la más alta (el hueco
+de 2px entre barras queda dentro); solo cuentan las barras visibles y sin
+ninguna se oculta. Se reajusta sola con `OnShow`/`OnHide` de las dos
+barras (`HookScript`), así que sirve cualquier camino que las muestre u
+oculte (comandos, restauración del login). Va a la misma `FrameStrata` que
+la barra de xp y 5 niveles por encima (sobre la nativa, que tiene ratón y
+tooltips propios). Las barras no tienen ratón: lo lleva esta zona.
+
+- **Contenido, puro** (`core/bar_hover.lua: Ledger.BuildBarTooltipSections`):
+  devuelve `{ { title=, rows = { { text=, color={r,g,b} }, ... } }, ... }`,
+  en este orden: (1) `Level xp composition` — xp por origen de TODAS las
+  sesiones del nivel + bono por descanso si lo hay; (2) `Level activity (%
+  of samples)`; (3) `This session (% of samples)` — actividad como
+  porcentaje de muestras, nunca tiempo absoluto. Recibe `{ sessions=,
+  levelTicks=, palette=, showXP=, showTime= }`: la paleta llega como
+  PARÁMETRO (`core/` no puede conocer `ui/palette.lua`; `ui/` le pasa
+  `Ledger.PALETTE`, así que los colores son siempre los de las barras);
+  `showXP`/`showTime` a `false` omiten esas secciones (barra oculta) y una
+  sección sin datos (p. ej. sin sesión) no se emite vacía. La capa `ui/` solo
+  recorre esa forma.
+- **Label**: al entrar se muestra el label de xp sobre la barra de xp
+  (ver arriba) y se oculta al salir. Es por zona, no por barra: con el
+  ratón sobre la barra de actividad también aparece.
+- **Colocación**: `ANCHOR_NONE` con el tooltip colgando ENCIMA del número
+  de xp/hora si está apilado sobre las barras (posición por defecto, sin
+  `ratePos`), para no taparlo; si no, encima de la zona.
+- **Refresco**: mientras el ratón está dentro, `OnUpdate` limitado a 1s
+  reconstruye label y tooltip (cambian con cada xp y cada muestra).
 
 ### Número principal de xp/hora (`core/rate.lua` + `ui/rate_frame.lua`, `/ldg rate`)
 
 Frame propio, "destacado" (`SetFrameStrata("HIGH")`), anclado encima de
 la barra visible más alta. **La pila, de abajo arriba** (2px entre cada
-una, salvo 1px entre la barra nativa y la de xp): barra nativa → barra de
-composición de xp → barra de actividad → este número. Si la barra de
+una): barra de composición de xp (que ocupa el sitio de la nativa; con
+`/ldg native` apagado va 1px sobre ella) → barra de actividad → este
+número. Si la barra de
 actividad está visible el número se ancla a ELLA (`frame:SetPoint("BOTTOM",
 Ledger.timeBarFrame, "TOP", 0, 2)`); si no, a la de xp
 (`Ledger.xpBarFrame`). Anclar siempre a la de xp (lo que hacía antes, con
@@ -937,8 +1025,9 @@ absoluta y nada de esto aplica.
   tiempo con el cliente parado no está en el denominador, por diseño (ver
   "Muestreo de actividad"). Decisión de esta reescritura: el xp/hora
   necesita un denominador y no se le permite usar tiempo de pared; el
-  total de muestras es la única fuente que queda. Es la única
-  presentación con horas, y es una tasa, no un tiempo mostrado.
+  total de muestras es la única fuente que queda. El número principal es
+  una tasa (horas, no un tiempo mostrado); el tiempo muestreado solo se
+  muestra en el panel al pasar el ratón (ver más abajo).
 - **Guion con menos de 60 muestras** (`Ledger.RATE_MIN_SAMPLES = 60`,
   `core/rate.lua: Ledger.ComputeXPRate`): por debajo de ese umbral el
   denominador es tan pequeño que la tasa sale disparada (50xp en 5
@@ -964,7 +1053,7 @@ absoluta y nada de esto aplica.
   `ui/frame.lua: SavePosition`). **A propósito, sin entrada en
   `Ledger.DEFAULTS`**: mientras `LedgerDB.ratePos` sea `nil`
   (nunca arrastrado), `Ledger.RestoreRatePosition()` vuelve a anclar
-  encima de la barra de xp por defecto; en cuanto el jugador lo
+  encima de la pila de barras por defecto; en cuanto el jugador lo
   arrastra una vez, esa posición absoluta pasa a mandar en cada login,
   igual que la posición del panel principal.
 - `/ldg rate` alterna `LedgerDB.rateShown` y muestra/oculta el frame.
@@ -976,12 +1065,23 @@ secciones que vive en `core/rate.lua`, pensada para crecer sin
 rehacerse.
 
 - **`Ledger.BuildRatePanelSections(rates)`** (pura, `rates =
-  { sessionRate=, levelRate= }` ya calculado por
-  `Ledger.ComputeHeadlineRates`): devuelve `{ { title=, rows = {
-  {label=, value=, color=}, ... } }, ... }` — hoy una única sección
-  `"XP/hour"` con dos filas (`"This session"`, el mismo número que el
+  { sessionRate=, levelRate=, sessionSamples=, levelSamples= }` ya
+  calculado por `Ledger.ComputeHeadlineRates`, que pasa los recuentos de
+  muestras tal cual): devuelve `{ { title=, rows = {
+  {label=, value=, color=}, ... }, notes = { "línea", ... } }, ... }`
+  (`notes` opcional: líneas de texto tras las filas, en
+  `Ledger.RATE_NOTE_COLOR`) — hoy dos secciones. `"XP/hour"`, con dos filas
+  (`"This session"`, el mismo número que el
   frame principal, en `Ledger.RATE_HIGHLIGHT_COLOR` blanco; `"This
-  level"`, en `Ledger.RATE_DEFAULT_COLOR` gris claro). Añadir el
+  level"`, en `Ledger.RATE_DEFAULT_COLOR` gris claro). `"Sampled time"`
+  (solo si `rates` trae recuentos de muestras): `"This session"` y `"This
+  level"` como duración (`Ledger.FormatDuration`: `45s`, `12m 05s`,
+  `1h 23m` — desde la hora se quitan los segundos), derivada de los
+  mismos contadores de actividad (1 muestra = 1s), con la nota `"Time
+  sampled by the addon; it may differ from the real played time."`: es lo
+  que el addon observó (el muestreador solo corre con el cliente en marcha),
+  no un tiempo jugado, y una diferencia con `/played` o el reloj es
+  esperable, no un fallo. Añadir el
   histórico de últimos niveles o un desglose por origen más adelante es
   añadir otra entrada a esta lista — `ui/rate_frame.lua:
   RenderHoverPanel` recorre secciones y filas genéricamente, sin
@@ -1224,6 +1324,12 @@ o que casca al llamarla no impide ver el resto del informe.
   patrones base de kill/explore y los de `EXHAUSTION` del bono por
   descanso — ver "Captura de eventos" arriba, que sí las separa para su
   propia lógica; aquí solo interesa el inventario crudo).
+- **Relleno de la barra nativa** (`nativeFill`, leído de
+  `Ledger.nativeFillInfo` — ver "Barra de composición de xp"): `hidden`,
+  `overlay only` (con el motivo y la descripción de con qué está
+  construida la barra nativa: es lo que hace falta para arreglar la
+  búsqueda en un cliente concreto), `visible` o `n/a`. Es la forma de
+  saber, en cada cliente real, si el relleno se pudo ocultar limpiamente.
 - **`C_ChatInfo`**: presencia simple (`C_ChatInfo ~= nil`), sin llamar a
   nada dentro — no se usa en ningún sitio del addon todavía, se prueba
   como referencia de cara a un futuro filtrado de canal de chat.
@@ -1352,7 +1458,8 @@ arriba:
 - `LedgerDB` (cuenta, `## SavedVariables`): `pos`, `shown`, `version`,
   `includeRested` (toggle de `/ldg rested`, `true` por defecto),
   `barShown`/`barHeight`/`timeBarShown` (barras), `barDefaultPos`/
-  `barDefaultWidth`, `rateShown`, `ratePos`, `viewDefaultsApplied`.
+  `barDefaultWidth`, `rateShown`, `ratePos`, `viewDefaultsApplied`,
+  `replaceNative` (toggle de `/ldg native`, `true` por defecto).
   **Nunca se borra por cambio de versión**: son ajustes de interfaz que no
   dependen del esquema de datos; `Ledger.InitDB(db, defaults)` solo rellena
   lo que falte y estampa la versión.
@@ -1580,6 +1687,24 @@ falta en el `.toc`).
   `/reload`, y el aviso INFO salga una sola vez por sesión; y que
   `UI_SCALE_CHANGED` reancle de verdad al cambiar la escala de la UI
   (`Configuración → Interfaz`), no solo `PLAYER_ENTERING_WORLD`.
+- **Verificar en el juego la sustitución de la barra de xp nativa**
+  (nunca probada; solo con un cliente simulado que reproduce la forma
+  supuesta de la barra en cada cliente, no la real): en Classic Era y en
+  WoW Forever, `/ldg probe` → `Native xp bar fill:` debe decir `hidden`;
+  si dice `overlay only`, el motivo trae la estructura real de la barra
+  para corregir la búsqueda. Comprobar que la barra de composición cubre
+  exactamente la nativa (posición y tamaño), que con el relleno oculto no
+  se rompe nada del sistema de barras de seguimiento (cambiar la
+  reputación seguida, subir de nivel, `/reload`), que `/ldg native` y
+  `/ldg bar` devuelven el relleno, y qué pasa con el texto nativo de xp
+  si está activada la opción de mostrarlo siempre (no se toca: podría
+  verse bajo la barra). Sin confirmar: que Blizzard no reconstruya la
+  barra (y su relleno) sin pasar por un evento que Ledger reaplique.
+- Ver en el juego la zona de hover unificada (nunca probada): que el
+  tooltip y el label salgan al pasar por cualquiera de las dos barras y
+  por el hueco entre ellas, que la zona gane el ratón a la barra nativa,
+  que el tooltip cuelgue bien encima del número de xp/hora y que arrastrar
+  en modo degradado siga moviendo la barra.
 - Ver visualmente en el juego el número de xp/hora y su panel al pasar
   el ratón (`/ldg rate`, ver "Número principal de xp/hora" arriba,
   nunca probado): que el anclaje centrado 2px sobre la pila de barras se

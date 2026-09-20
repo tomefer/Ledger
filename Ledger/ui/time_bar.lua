@@ -1,6 +1,8 @@
 -- Ledger - ui/time_bar.lua
 -- Current level's activity bar: parallel to the xp composition bar
--- (same width and horizontal position, same height, 2px gap above it),
+-- (same width and horizontal position, 2px gap above it, its own thin
+-- height -- LedgerDB.barHeight -- since the xp bar now takes the native
+-- bar's height),
 -- with the 4 core/ticks.lua activities in a fixed order (combat,
 -- non-combat, travel, dead). PROPORTIONAL axis: always occupies 100% of
 -- the width, not comparable pixel-to-pixel with the xp bar (different
@@ -8,7 +10,8 @@
 -- is ever shown. Thin layer: segment computation lives in core/, this
 -- file only paints with reusable textures (one fixed per activity:
 -- they're always the same 4, in the same order, so unlike the xp bar
--- there's no need for a dynamic pool).
+-- there's no need for a dynamic pool). Hover (the unified tooltip over
+-- both bars) lives in ui/bars_hover.lua.
 
 local ADDON_NAME, Ledger = ...
 
@@ -68,7 +71,7 @@ local function LayoutBorder()
 end
 
 -- Anchors the parallel frame to the xp bar: same width and horizontal
--- position, same height, 2px gap above it. The points are set whatever
+-- position, 2px gap above it, height LedgerDB.barHeight. The points are set whatever
 -- the xp bar's width is (they follow it live, and the xp/hour number
 -- hangs from this frame, so it must be anchored from the start); returns
 -- the width, which can still be 0 while the native bar has no final
@@ -80,7 +83,7 @@ local function AnchorToXPBar()
     end
     local width = xpBar:GetWidth() or 0
 
-    frame:SetSize(width, xpBar:GetHeight())
+    frame:SetSize(width, LedgerDB.barHeight or Ledger.DEFAULTS.barHeight)
     frame:ClearAllPoints()
     frame:SetPoint("BOTTOMLEFT", xpBar, "TOPLEFT", 0, 2)
     frame:SetPoint("BOTTOMRIGHT", xpBar, "TOPRIGHT", 0, 2)
@@ -140,37 +143,3 @@ function Ledger.ToggleTimeBar()
     Ledger.RestoreRatePosition() -- ...and stacks on top of this bar again
     return true
 end
-
-----------------------------------------------------------------------
--- Tooltip: each activity as a percentage of the level's samples (and,
--- below, of the active session's), never an absolute time
--- (core/ticks.lua: Ledger.FormatTickLines, a pure function), each line
--- colored with the SAME Ledger.PALETTE that paints the segments.
-----------------------------------------------------------------------
-
-local function AddTickLines(ticks)
-    for _, line in ipairs(Ledger.FormatTickLines(ticks)) do
-        local color = PALETTE[line.key] or PALETTE._fallback
-        GameTooltip:AddLine(line.text, color[1], color[2], color[3])
-    end
-end
-
-frame:EnableMouse(true)
-frame:SetScript("OnEnter", function(self)
-    GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:SetText("Level activity (% of samples)", 1, 1, 1)
-    AddTickLines(LedgerCharDB.levelTicks)
-
-    local sessions = LedgerCharDB.sessions
-    local session = sessions[#sessions]
-    if session and session.ticks then
-        GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("This session (% of samples)", 1, 1, 1)
-        AddTickLines(session.ticks)
-    end
-
-    GameTooltip:Show()
-end)
-frame:SetScript("OnLeave", function()
-    GameTooltip:Hide()
-end)

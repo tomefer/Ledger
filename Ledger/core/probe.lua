@@ -45,6 +45,18 @@ local function FormatBuild(build)
         tostring(build.version), tostring(build.build), tostring(build.date), tostring(build.tocversion))
 end
 
+-- One line for what was done to the native xp bar's fill (see
+-- ui/xp_bar.lua: Ledger.nativeFillInfo): "hidden" (the composition bar
+-- fully replaces it), "overlay only" (couldn't hide it cleanly: the
+-- composition bar just covers it, and the detail says why -- including
+-- what the native bar is made of), "visible" or "n/a".
+local function FormatNativeFill(info)
+    if not info then
+        return "  Native xp bar fill: not resolved yet (xp bar never applied this session)"
+    end
+    return string.format("  Native xp bar fill: %s (%s)", tostring(info.status), tostring(info.detail))
+end
+
 -- One line for the xp bar's resolved anchor (see ui/xp_bar.lua:
 -- Ledger.xpBarAnchorInfo, set on every AnchorToNativeBar call): the
 -- source description (which candidate matched, or "degraded" if none
@@ -64,6 +76,7 @@ end
 --   xpGainGlobals   = { "COMBATLOG_XPGAIN_...", ... },  -- sorted, may include the EXHAUSTION family too
 --   chatInfoPresent = true|false,
 --   xpBarAnchor     = { source=, width=, height= } | nil,
+--   nativeFill      = { status=, detail= } | nil,
 -- }
 function Ledger.FormatProbe(data)
     data = data or {}
@@ -85,6 +98,7 @@ function Ledger.FormatProbe(data)
     table.insert(lines, "  C_ChatInfo: " .. (data.chatInfoPresent and "present" or "absent"))
 
     table.insert(lines, FormatAnchor(data.xpBarAnchor))
+    table.insert(lines, FormatNativeFill(data.nativeFill))
 
     return table.concat(lines, "\n")
 end

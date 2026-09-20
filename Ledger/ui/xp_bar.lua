@@ -1,9 +1,14 @@
 -- Ledger - ui/xp_bar.lua
--- Current level's xp composition bar: anchored right above the native
--- xp bar, one colored segment per src stretch (merged by
--- core/xp_bar.lua: Ledger.ComputeBarSegments). Thin layer: computing
--- segments and their widths lives in core/, this file only paints them
--- with a pool of reusable textures.
+-- Current level's xp composition bar: one colored segment per src stretch
+-- (merged by core/xp_bar.lua: Ledger.ComputeBarSegments). By default it
+-- REPLACES the native xp bar: same position and size (anchored to the
+-- native bar's own corners), on top of it at a higher frame level, with
+-- the native bar's fill hidden (never its container: its geometry is the
+-- anchor and the size reference). LedgerDB.replaceNative = false (/ldg
+-- native) puts it back the way it started: native bar untouched and this
+-- one sitting above it. Thin layer: computing segments and their widths
+-- lives in core/, this file only paints them with a pool of reusable
+-- textures. Hover (label + tooltip) lives in ui/bars_hover.lua.
 
 local ADDON_NAME, Ledger = ...
 
@@ -109,16 +114,21 @@ local frame = CreateFrame("Frame", "LedgerXPBar", UIParent)
 frame:Hide()
 frame:SetClampedToScreen(true)
 frame:SetMovable(true)
-frame:RegisterForDrag("LeftButton")
-frame:SetScript("OnDragStart", function(self)
+Ledger.xpBarFrame = frame
+
+-- This frame takes no mouse of its own: the single hover zone over both
+-- bars (ui/bars_hover.lua) does, and forwards the drag here. Dragging only
+-- does anything in the degraded mode (see inDegradedMode).
+function Ledger.StartXPBarDrag()
     if inDegradedMode then
-        self:StartMoving()
+        frame:StartMoving()
     end
-end)
-frame:SetScript("OnDragStop", function(self)
-    self:StopMovingOrSizing()
+end
+
+function Ledger.StopXPBarDrag()
+    frame:StopMovingOrSizing()
     if inDegradedMode and LedgerDB then
-        local point, _, relativePoint, x, y = self:GetPoint()
+        local point, _, relativePoint, x, y = frame:GetPoint()
         LedgerDB.barDefaultPos = {
             point         = point or "CENTER",
             relativePoint = relativePoint or "CENTER",
@@ -126,8 +136,7 @@ frame:SetScript("OnDragStop", function(self)
             y             = y or 0,
         }
     end
-end)
-Ledger.xpBarFrame = frame
+end
 
 ----------------------------------------------------------------------
 -- Pool of reusable texture pairs (base + rested): never created or
@@ -212,21 +221,26 @@ local function LayoutBorder()
     borderRight:SetWidth(1)
 end
 
+-- Segments span the frame's full height by anchoring to its top and
+-- bottom edges instead of copying its height at paint time: the frame's
+-- height now comes from the native bar's (see AnchorToNativeBar), which
+-- may not be laid out yet when a segment is first painted.
 local function PaintSegment(pair, segment)
-    local color  = PALETTE[segment.src] or PALETTE._fallback
-    local height = frame:GetHeight()
+    local color = PALETTE[segment.src] or PALETTE._fallback
 
     pair.base:ClearAllPoints()
-    pair.base:SetPoint("LEFT", frame, "LEFT", segment.offset, 0)
-    pair.base:SetSize(math.max(segment.width, 0.01), height)
+    pair.base:SetPoint("TOPLEFT", frame, "TOPLEFT", segment.offset, 0)
+    pair.base:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", segment.offset, 0)
+    pair.base:SetWidth(math.max(segment.width, 0.01))
     pair.base:SetVertexColor(color[1], color[2], color[3], 1)
     pair.base:Show()
 
     if segment.restedWidth > 0 then
         local restedColor = Ledger.LightenColor(color, RESTED_LIGHTEN_AMOUNT)
         pair.rested:ClearAllPoints()
-        pair.rested:SetPoint("RIGHT", pair.base, "RIGHT", 0, 0)
-        pair.rested:SetSize(math.max(segment.restedWidth, 0.01), height)
+        pair.rested:SetPoint("TOPRIGHT", pair.base, "TOPRIGHT", 0, 0)
+        pair.rested:SetPoint("BOTTOMRIGHT", pair.base, "BOTTOMRIGHT", 0, 0)
+        pair.rested:SetWidth(math.max(segment.restedWidth, 0.01))
         pair.rested:SetVertexColor(restedColor[1], restedColor[2], restedColor[3], 1)
         pair.rested:Show()
     else
@@ -259,12 +273,15 @@ local function DegradedAnchor()
     return frame:GetWidth()
 end
 
--- Anchors the frame to the resolved native xp bar (FindNativeXPBar):
--- same width and same horizontal position, right above it. Falls back
--- to DegradedAnchor if nothing resolves. Always returns a usable
--- width -- never nil, there's always some anchor now, native or
--- degraded. Also records Ledger.xpBarAnchorInfo (source, width,
--- height) for /ldg probe to report.
+-- Anchors the frame to the resolved native xp bar (FindNativeXPBar).
+-- Replacing (LedgerDB.replaceNative, the default): both corners of this
+-- frame on the native bar's, so it takes its exact position and size, and
+-- a frame level above it so it is drawn over it and gets the mouse first.
+-- Not replacing: same width and horizontal position, 1px above it, at the
+-- configured bar height. Falls back to DegradedAnchor if nothing
+-- resolves. Always returns a usable width -- never nil, there's always
+-- some anchor now, native or degraded. Also records
+-- Ledger.xpBarAnchorInfo (source, width, height) for /ldg probe to report.
 local function AnchorToNativeBar()
     local nativeBar, source = FindNativeXPBar()
 
@@ -275,16 +292,160 @@ local function AnchorToNativeBar()
     else
         inDegradedMode = false
         width = nativeBar:GetWidth()
-        frame:SetSize(width, LedgerDB.barHeight or Ledger.DEFAULTS.barHeight)
         frame:ClearAllPoints()
-        frame:SetPoint("BOTTOMLEFT", nativeBar, "TOPLEFT", 0, 1)
-        frame:SetPoint("BOTTOMRIGHT", nativeBar, "TOPRIGHT", 0, 1)
+        if LedgerDB.replaceNative then
+            frame:SetSize(width, nativeBar:GetHeight())
+            frame:SetPoint("TOPLEFT", nativeBar, "TOPLEFT", 0, 0)
+            frame:SetPoint("BOTTOMRIGHT", nativeBar, "BOTTOMRIGHT", 0, 0)
+        else
+            frame:SetSize(width, LedgerDB.barHeight or Ledger.DEFAULTS.barHeight)
+            frame:SetPoint("BOTTOMLEFT", nativeBar, "TOPLEFT", 0, 1)
+            frame:SetPoint("BOTTOMRIGHT", nativeBar, "TOPRIGHT", 0, 1)
+        end
+        -- Same strata as the native bar and a level above it, so this
+        -- frame (and the hover zone over it) wins the overlap. Also the
+        -- fallback when the fill can't be hidden: an opaque overlay.
+        pcall(function()
+            frame:SetFrameStrata(nativeBar:GetFrameStrata())
+            frame:SetFrameLevel(math.min(nativeBar:GetFrameLevel() + 10, 9000))
+        end)
         LayoutBorder()
     end
 
     Ledger.xpBarAnchorInfo = { source = source, width = width, height = frame:GetHeight() }
     return width
 end
+
+----------------------------------------------------------------------
+-- Hiding the native bar's FILL (only the fill: its container keeps its
+-- geometry, which is our anchor and size reference, and its background
+-- track stays). The native fill is the StatusBar's own texture; hidden by
+-- alpha 0 -- nothing is removed, reparented or hooked, so the client's
+-- status tracking bar code keeps running exactly as before and
+-- restoring is just putting the alpha back. Every step is verified and
+-- guarded: if the fill can't be identified or the alpha doesn't take,
+-- the bar is left as a plain overlay (see AnchorToNativeBar) and
+-- Ledger.nativeFillInfo says why, for /ldg native and /ldg probe.
+----------------------------------------------------------------------
+
+local hiddenFill = {} -- texture -> the alpha it had before we hid it
+
+local function RestoreNativeFill()
+    for texture, alpha in pairs(hiddenFill) do
+        pcall(texture.SetAlpha, texture, alpha)
+        hiddenFill[texture] = nil
+    end
+end
+
+-- Short description of what the native bar is made of, for the failure
+-- message (this is what would be needed to fix the lookup for a client).
+local function DescribeNativeBar(nativeBar)
+    local parts = {}
+    local function describe(label, obj)
+        local max = "?"
+        if type(obj) == "table" and obj.GetMinMaxValues then
+            local ok, _, m = pcall(obj.GetMinMaxValues, obj)
+            max = ok and tostring(m) or "err"
+        end
+        parts[#parts + 1] = string.format("%s[%s max=%s]", label, type(obj) == "table" and obj.GetObjectType and obj:GetObjectType() or type(obj), max)
+    end
+    if nativeBar.StatusBar then describe("StatusBar", nativeBar.StatusBar) end
+    for i, child in ipairs({ nativeBar:GetChildren() }) do
+        describe("child" .. i, child)
+        if child.StatusBar then describe("child" .. i .. ".StatusBar", child.StatusBar) end
+    end
+    return #parts > 0 and table.concat(parts, ", ") or "no StatusBar and no children"
+end
+
+-- The StatusBar (or StatusBar-like frame) whose range is the xp range:
+-- looked up on the resolved native bar itself, its .StatusBar, and its
+-- children, and matched by UnitXPMax like FindMatchingChild does, so a
+-- reputation bar next to it is never picked. Returns the object, or
+-- (nil, reason).
+local function FindXPStatusBar(nativeBar)
+    local xpMax = UnitXPMax("player")
+    if not xpMax or xpMax <= 0 then
+        return nil, "no xp bar to hide (max level)"
+    end
+
+    local candidates = {}
+    local function add(obj)
+        if type(obj) == "table" then candidates[#candidates + 1] = obj end
+    end
+    add(nativeBar.StatusBar)
+    add(nativeBar)
+    for _, child in ipairs({ nativeBar:GetChildren() }) do
+        add(child.StatusBar)
+        add(child)
+    end
+
+    for _, obj in ipairs(candidates) do
+        if obj.GetMinMaxValues and obj.GetStatusBarTexture then
+            local _, max = obj:GetMinMaxValues()
+            if max and math.abs(max - xpMax) < 0.5 then
+                return obj
+            end
+        end
+    end
+    return nil, "no StatusBar with the xp range (" .. DescribeNativeBar(nativeBar) .. ")"
+end
+
+local function SetFillInfo(status, detail)
+    local previous = Ledger.nativeFillInfo
+    Ledger.nativeFillInfo = { status = status, detail = detail }
+    if not previous or previous.status ~= status or previous.detail ~= detail then
+        Ledger.Log("info", string.format("Native xp bar fill: %s (%s)", status, detail))
+    end
+end
+
+-- Puts the native fill in the state it should be in right now: hidden
+-- while this bar is shown and replacing it, visible in every other case
+-- (bar hidden, /ldg native off, no native bar at all). Idempotent: it
+-- always restores first, so it is safe to call as often as needed.
+local function ApplyNativeFill()
+    RestoreNativeFill()
+
+    if not LedgerDB or not LedgerDB.replaceNative then
+        return SetFillInfo("visible", "not replacing the native bar (/ldg native)")
+    end
+    if not frame:IsShown() then
+        return SetFillInfo("visible", "the xp bar is hidden")
+    end
+
+    local nativeBar, source = FindNativeXPBar()
+    if not nativeBar then
+        return SetFillInfo("n/a", "no native bar found: degraded mode")
+    end
+
+    local ok, statusBar, reason = pcall(FindXPStatusBar, nativeBar)
+    if not ok then
+        return SetFillInfo("overlay only", "lookup failed: " .. tostring(statusBar))
+    end
+    if not statusBar then
+        return SetFillInfo("overlay only", reason)
+    end
+
+    local hidden, err = pcall(function()
+        local texture = statusBar:GetStatusBarTexture()
+        if not texture or not texture.SetAlpha then
+            error("the StatusBar has no texture to hide", 0)
+        end
+        hiddenFill[texture] = texture:GetAlpha()
+        texture:SetAlpha(0)
+        if texture:GetAlpha() ~= 0 then
+            error("SetAlpha(0) did not take (alpha is " .. tostring(texture:GetAlpha()) .. ")", 0)
+        end
+    end)
+    if not hidden then
+        RestoreNativeFill()
+        return SetFillInfo("overlay only", tostring(err))
+    end
+    SetFillInfo("hidden", source)
+end
+
+-- The fill follows this frame's visibility: hidden bar -> native fill back.
+frame:SetScript("OnShow", ApplyNativeFill)
+frame:SetScript("OnHide", ApplyNativeFill)
 
 ----------------------------------------------------------------------
 -- Data: all of the current level's sessions (never just the active
@@ -330,6 +491,7 @@ local WIDTH_TOLERANCE = 0.5
 function Ledger.RedrawXPBarFull()
     redrawing = true
     local width = AnchorToNativeBar()
+    ApplyNativeFill() -- re-resolved on every full redraw: the native bar can be rebuilt or load late
     if not width or not frame:IsShown() then
         redrawing = false
         return false
@@ -427,44 +589,44 @@ function Ledger.ToggleXPBar()
 end
 
 ----------------------------------------------------------------------
--- Tooltip: xp breakdown by source for the current level (all sessions,
--- same as the bar -- never just the active one). Uses the SAME
--- Ledger.PALETTE table that paints the segments, so the bar and the
--- tooltip can never fall out of sync on each source's color.
+-- /ldg native: back to the native bar (and out again)
 ----------------------------------------------------------------------
 
-local SRC_LABELS = {
-    kill    = "Kills",
-    quest   = "Quests",
-    explore = "Exploration",
-    unknown = "Unknown",
-}
+-- Flips LedgerDB.replaceNative and re-applies everything: with it off the
+-- native fill is visible again and this bar goes back above the native
+-- one (nothing is lost, both are on screen); with it on, this bar takes
+-- the native one's place. Returns (replacing, Ledger.nativeFillInfo) so
+-- the caller can report what actually happened.
+function Ledger.ToggleReplaceNative()
+    LedgerDB.replaceNative = not LedgerDB.replaceNative
+    Ledger.RedrawXPBarFull()
+    return LedgerDB.replaceNative, Ledger.nativeFillInfo
+end
 
-frame:EnableMouse(true)
-frame:SetScript("OnEnter", function(self)
-    GameTooltip:SetOwner(self, "ANCHOR_TOP")
-    GameTooltip:SetText("Level xp composition", 1, 1, 1)
+----------------------------------------------------------------------
+-- Hover label: "{current xp} / {level xp}" centered in white over the
+-- bar, like the native bar's own text. Shown and hidden by the hover
+-- zone (ui/bars_hover.lua); the text itself is composed in core/
+-- (Ledger.FormatXPLabel).
+----------------------------------------------------------------------
 
-    local sessions = LedgerCharDB.sessions
-    local bySource = Ledger.XPBySourceAcrossSessions(sessions)
+local label = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+label:SetPoint("CENTER", frame, "CENTER", 0, 0)
+label:SetTextColor(1, 1, 1, 1)
+label:Hide()
 
-    local totalRested = 0
-    for _, session in ipairs(sessions) do
-        totalRested = totalRested + Ledger.TotalRested(session)
+-- Recomputes the text from the live values and shows it (or hides it
+-- when there is nothing to say, e.g. max level).
+function Ledger.ShowXPBarLabel()
+    local text = Ledger.FormatXPLabel(UnitXP("player"), UnitXPMax("player"))
+    if text then
+        label:SetText(text)
+        label:Show()
+    else
+        label:Hide()
     end
+end
 
-    for _, src in ipairs({ "kill", "quest", "explore", "unknown" }) do
-        local xp    = bySource[src] or 0
-        local color = PALETTE[src]
-        GameTooltip:AddLine(string.format("%s: %d xp", SRC_LABELS[src], xp), color[1], color[2], color[3])
-    end
-
-    if totalRested > 0 then
-        GameTooltip:AddLine(string.format("Rested: %d xp", totalRested), 1, 1, 1)
-    end
-
-    GameTooltip:Show()
-end)
-frame:SetScript("OnLeave", function()
-    GameTooltip:Hide()
-end)
+function Ledger.HideXPBarLabel()
+    label:Hide()
+end

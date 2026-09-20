@@ -21,7 +21,12 @@ Ledger.DEFAULTS = {
     -- view hidden on purpose stays hidden (see Ledger.ApplyViewDefaultsOnce
     -- for the one exception).
     barShown        = true,
-    barHeight       = 8,
+    barHeight       = 8, -- the activity bar's height, and the xp bar's when not replacing the native one
+    -- The xp composition bar takes the native xp bar's place (see
+    -- ui/xp_bar.lua); /ldg native turns that off, restoring the native
+    -- bar and putting the composition bar back above it. A new key (no
+    -- old stamped value to worry about), so InitDB's default just applies.
+    replaceNative   = true,
     timeBarShown    = true,
     -- Fallback position/width for the xp composition bar when no
     -- native bar can be found to anchor to (ui/xp_bar.lua:

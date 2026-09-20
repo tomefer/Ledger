@@ -112,5 +112,8 @@ function Ledger.GatherProbeData()
         -- if the xp bar has never been redrawn yet this session (e.g.
         -- /ldg bar was never turned on).
         xpBarAnchor     = Ledger.xpBarAnchorInfo,
+        -- Set by ui/xp_bar.lua: ApplyNativeFill -- whether the native
+        -- fill could be hidden, or the bar is only overlaying it.
+        nativeFill      = Ledger.nativeFillInfo,
     }
 end
