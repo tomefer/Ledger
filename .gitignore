@@ -2,3 +2,4 @@
 .claude/hooks.disabled
 # Personal Claude Code overrides
 .claude/settings.local.json
+.claude/worktrees/
