@@ -6,8 +6,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/log.lua")
-
 -- Severity order. "off" logs nothing; "trace" logs everything.
 local LEVEL_RANK = { off = 0, error = 1, info = 2, trace = 3 }
 Ledger.LOG_LEVELS = { "off", "error", "info", "trace" }

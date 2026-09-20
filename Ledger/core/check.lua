@@ -16,8 +16,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/check.lua")
-
 -- status -> prefix of each rendered line. Only "bad" lines count as
 -- discrepancies; ">>>" makes them stand out at a glance in a wall of
 -- monospace text.

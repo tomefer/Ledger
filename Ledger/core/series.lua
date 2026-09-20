@@ -10,8 +10,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/series.lua")
-
 Ledger.SERIES = {
     xp = { key = "e", stride = 4, fields = { "off", "xp", "src", "rested" } },
     -- xp: xp is the TOTAL xp of the event (UnitXP delta); rested is the

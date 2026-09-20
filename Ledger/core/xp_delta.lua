@@ -10,8 +10,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/xp_delta.lua")
-
 -- Computes the delta between two readings:
 --   previousXP, currentXP       -- UnitXP("player") before/after
 --   previousMaxXP               -- UnitXPMax("player") CACHED at the

@@ -20,8 +20,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/ticks.lua")
-
 -- Fixed order, used everywhere activities are listed or drawn (the time
 -- bar's segments, tooltips, exports), so the shape is always
 -- recognizable and never reordered by size.

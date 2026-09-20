@@ -7,8 +7,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/state_dump.lua")
-
 local XP_SERIES  = Ledger.SERIES.xp
 local MAX_EVENTS = 30
 

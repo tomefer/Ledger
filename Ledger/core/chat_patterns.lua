@@ -8,8 +8,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/chat_patterns.lua")
-
 local function EscapeMagic(text)
     return (text:gsub("([%(%)%.%%%+%-%*%?%[%]%^%$])", "%%%1"))
 end

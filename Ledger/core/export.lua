@@ -12,8 +12,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/export.lua")
-
 local XP_SERIES    = Ledger.SERIES.xp
 
 -- Above this many raw xp events (summed across every in-progress

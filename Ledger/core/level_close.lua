@@ -19,8 +19,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/level_close.lua")
-
 local XP_SERIES    = Ledger.SERIES.xp
 local OFF_FIELD    = Ledger.SeriesFieldIndex(XP_SERIES, "off")
 local XP_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "xp")

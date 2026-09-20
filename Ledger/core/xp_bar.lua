@@ -8,8 +8,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/xp_bar.lua")
-
 local XP_SERIES    = Ledger.SERIES.xp
 local XP_FIELD     = Ledger.SeriesFieldIndex(XP_SERIES, "xp")
 local SRC_FIELD    = Ledger.SeriesFieldIndex(XP_SERIES, "src")

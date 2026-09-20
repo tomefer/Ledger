@@ -7,8 +7,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/xp_gain_matcher.lua")
-
 -- Maximum seconds between the amount signal and the source signal to
 -- consider them the same xp event. In-game, a real gap of up to ~0.42s
 -- has been observed between PLAYER_XP_UPDATE and CHAT_MSG_COMBAT_XP_GAIN

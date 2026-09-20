@@ -9,8 +9,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/time_bar.lua")
-
 -- ticks: a set of activity counters (Ledger.NewTicks). widthPx: the
 -- bar's total width. Returns a list in Ledger.TICK_KEYS order:
 -- { key=, offset=, width= } (offset/width in pixels). If there are no

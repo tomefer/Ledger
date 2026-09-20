@@ -10,8 +10,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/xp_reconciler.lua")
-
 function Ledger.NewReconciler()
     return { expectedTotal = 0, recordedTotal = 0 }
 end

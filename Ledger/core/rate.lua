@@ -11,8 +11,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/rate.lua")
-
 -- Below this many samples, an xp/hour rate is too noisy to show as a
 -- number: a small denominator makes it spike wildly (e.g. 50 xp in 5
 -- samples reads as 36000 xp/h). Ledger.ComputeXPRate returns nil below

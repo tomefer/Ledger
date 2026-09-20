@@ -8,8 +8,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/bar_hover.lua")
-
 -- "{current xp} / {level xp}" with thousands separators, like the native
 -- xp bar's own hover text. nil when there is no xp bar to describe (max
 -- level: max is 0 or nil) so the caller shows nothing.

@@ -5,8 +5,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/slash_command.lua")
-
 -- Stable order for /ldg help. name = "" is the no-argument command.
 Ledger.SLASH_COMMANDS = {
     { name = "",      desc = "shows or hides the main panel" },

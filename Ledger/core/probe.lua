@@ -7,8 +7,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/probe.lua")
-
 -- One line for a probed global function/table: "NAME: absent" if it
 -- doesn't exist, "NAME: present, call failed (err)" if calling it
 -- raised an error, "NAME: present, no return value" if it exists and

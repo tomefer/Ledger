@@ -4,8 +4,6 @@
 
 local ADDON_NAME, Ledger = ...
 
-print("Ledger: core/xp.lua")
-
 -- Saved-data schema version. There are NO migrations: if the version
 -- found on disk for a character's data differs from this one, that data
 -- is wiped and tracking starts clean (see Ledger.InitCharDB). Bump this
