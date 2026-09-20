@@ -22,6 +22,7 @@ local PROBE_API_TAKES_PLAYER = {
     GetUnitSpeed       = true,
     UnitAffectingCombat = true,
     UnitIsDeadOrGhost  = true,
+    issecretvalue      = true,
 }
 
 -- Fixed order (never derived from pairs(), which has no stable order
@@ -30,10 +31,14 @@ local PROBE_API_TAKES_PLAYER = {
 -- real per-second activity sampler (ui/xp_capture.lua:
 -- SampleTimeState, see core/ticks.lua), not just a
 -- forward-looking curiosity -- worth checking here on every client this
--- addon ships to.
+-- addon ships to. issecretvalue (called on "player", a plain string, so
+-- expected to say false) is what ui/xp_capture.lua: IsReadableMessage
+-- prefers to detect secret chat payloads; absent here just means that
+-- function relies on its pcall probe alone in this client.
 local PROBE_API_ORDER = {
     "UnitXP", "UnitXPMax", "GetXPExhaustion", "RequestTimePlayed",
     "UnitOnTaxi", "GetUnitSpeed", "UnitAffectingCombat", "UnitIsDeadOrGhost",
+    "issecretvalue",
 }
 
 -- Calls the global function `name` (if it exists) and captures up to

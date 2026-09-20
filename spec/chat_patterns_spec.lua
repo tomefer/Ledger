@@ -113,6 +113,30 @@ describe("core/chat_patterns.lua", function()
         end)
     end)
 
+    describe("a message that is not a string (nil; ui/ never passes a secret one)", function()
+        local entries
+
+        before_each(function()
+            entries = {
+                { name = "X", text = "You gain %d experience.", pattern = Ledger.BuildPattern("You gain %d experience.") },
+            }
+        end)
+
+        it("ClassifyXPGainMatch matches nothing and falls back to explore", function()
+            local category, attempts = Ledger.ClassifyXPGainMatch(entries, nil)
+            assert.are.equal("explore", category)
+            assert.are.same({}, attempts)
+        end)
+
+        it("ExtractRestedBonus returns 0", function()
+            assert.are.equal(0, Ledger.ExtractRestedBonus(entries, nil))
+        end)
+
+        it("ExtractExploreXP returns nil", function()
+            assert.is_nil(Ledger.ExtractExploreXP(entries, nil))
+        end)
+    end)
+
     describe("BuildSuffixPattern and ExtractRestedBonus", function()
         local restedEntry
 
