@@ -131,11 +131,72 @@ vez de suponer.
   uno de los conocidos. Al terminar imprime la versión del .toc
   desplegada y la hora. Los dos flavors despliegan el `.toc` tal cual (0.11.6–0.11.7 desplegaban
   en la beta un `.toc` con solo `## Interface: 16001`; se quitó al demostrar
-  que no influía, ver "SavedVariables en la beta"). **Hay que ejecutarlo (con el flavor que toque)
-  tras cualquier cambio en los ficheros del addon** (antes recreaba a
-  mano un symlink desde
-  Interface/AddOns; ya no hace falta, el script sustituye ese paso
-  manual). Hecho eso, basta con /reload dentro del juego.
+  que no influía, ver "SavedVariables en la beta"). Dos modos extra, los
+  que usan los hooks (ver "Hooks de Claude Code" abajo): `--if-installed`
+  despliega solo si Ledger ya está instalado en ese flavor (si no, imprime
+  `Skipped ...` y sale con 0), y `--status` no despliega nada: imprime una
+  línea comparando repo y cliente — versión del `.toc` **y** contenido de
+  los ficheros — y sale con 0 (en sincronía), 1 (desincronizado) o 2 (no
+  instalado / carpeta del cliente no encontrada). Tras un despliegue basta
+  con `/reload` dentro del juego. Desde Claude Code no hace falta lanzarlo
+  a mano: lo hace el hook tras cada edición (ver abajo); solo hay que
+  ejecutarlo a mano para cambios hechos fuera de Claude Code o con `Bash`
+  (`sed`, `git checkout`...), que el hook no ve, o para la primera
+  instalación en un flavor.
+
+## Hooks de Claude Code (`.claude/settings.json` + `.claude/hooks/`)
+
+Automatizan la verificación y el despliegue para que no dependan de
+acordarse. Corren en WSL y solo usan `python3` (esta máquina no tiene
+`jq`) para leer el JSON de entrada y escribir el de salida.
+
+- **`PostToolUse` sobre `Write|Edit`** (`hooks/post-edit.sh`): si el
+  fichero editado está bajo `Ledger/` (lo que va al cliente; `spec/`,
+  README, CLAUDE.md, `deploy.sh` y la configuración son un no-op
+  silencioso):
+  1. Ejecuta `busted`. Si falla, **no despliega**: devuelve
+     `decision: "block"` con el detalle (Claude lo ve y lo arregla) y un
+     `systemMessage` con el resumen (lo ves tú).
+  2. Si pasa, ejecuta `./deploy.sh --if-installed <flavor>` para cada
+     flavor de `LEDGER_HOOK_FLAVORS` (por defecto `forever classic_era`),
+     solo donde Ledger ya está instalado. Si el despliegue falla, también
+     bloquea. Si no queda ningún flavor donde desplegar, avisa (no bloquea).
+  3. Confirma con una línea: `Ledger v<versión del .toc> deployed to
+     <flavors> at <hora>  [<resumen de busted>]`.
+  - **Rapidez** (~1,2 s con tests y dos flavors): `busted` sobre DrvFs
+    (`/mnt/c`) tarda ~2,3 s casi todo en I/O (los specs hacen muchos
+    `loadfile` sobre el montaje 9p) y ~0,2 s en ext4. Como los specs solo
+    cargan `Ledger/core/*`, el hook los ejecuta sobre una copia fresca de
+    `Ledger/` + `spec/` en un directorio temporal nativo (mismo contenido,
+    mismas rutas relativas); si la copia falla, ejecuta en el sitio. Un
+    `flock` serializa ejecuciones simultáneas.
+- **`SessionStart`** (`startup|resume|clear`, `hooks/session-start.sh`):
+  imprime la versión del `.toc` del repo junto a la desplegada en cada
+  flavor (`deploy.sh --status`) y lo dice explícitamente si no coinciden.
+  Compara también el **contenido**: la versión solo sube al cerrar un
+  cambio, así que dos copias con la misma versión pueden diferir
+  (`SAME VERSION BUT CONTENT DIFFERS (N files: ...)`). Claude recibe el
+  mismo texto como contexto. Un flavor sin Ledger instalado sale como
+  informativo, no como desajuste.
+- **Límites**: solo ven `Write` y `Edit`. Que los ficheros del cliente
+  coincidan con el repo no garantiza que el juego ejecute lo último: hace
+  falta `/reload` (o reiniciar el cliente) tras cada despliegue.
+- **Variables de entorno** (todas opcionales): `LEDGER_WOW_PATH` (raíz de
+  la instalación de WoW, la lee `deploy.sh`; ver "Despliegue"),
+  `LEDGER_HOOK_FLAVORS` (flavors a refrescar y comprobar, separados por
+  espacios).
+- **Desactivarlos temporalmente**, de menos a más drástico:
+  - `touch .claude/hooks.disabled` desactiva **los dos** hooks (los scripts
+    salen sin hacer nada) sin reiniciar; `rm .claude/hooks.disabled` los
+    reactiva. Está en `.gitignore`.
+  - `LEDGER_HOOKS=off claude` (variable puesta al arrancar Claude Code)
+    hace lo mismo para esa sesión.
+  - `"disableAllHooks": true` en `.claude/settings.local.json` (también en
+    `.gitignore`) apaga todos los hooks de Claude Code, no solo estos.
+  - `/hooks` dentro de Claude Code muestra y permite revisar los hooks
+    activos.
+- Si Claude Code se abrió antes de existir `.claude/`, abre `/hooks` una
+  vez o reinicia la sesión para que cargue la configuración.
 
 ## Modelo de datos
 
