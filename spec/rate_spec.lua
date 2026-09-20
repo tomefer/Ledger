@@ -154,10 +154,10 @@ describe("core/rate.lua", function()
     end)
 
     describe("BuildRatePanelSections", function()
-        it("returns one section with a session row and a level row", function()
+        it("starts with the xp/hour section: a session row and a level row", function()
             local sections = Ledger.BuildRatePanelSections({ sessionRate = 1234, levelRate = 500 })
 
-            assert.are.equal(1, #sections)
+            assert.are.equal(2, #sections)
             assert.are.equal("XP/hour", sections[1].title)
             assert.are.equal(2, #sections[1].rows)
 
@@ -185,11 +185,7 @@ describe("core/rate.lua", function()
             assert.are.equal("-", sections[1].rows[1].value)
         end)
 
-        it("no sample counts in rates: no time section (only the rate one)", function()
-            assert.are.equal(1, #Ledger.BuildRatePanelSections({ sessionRate = 1, levelRate = 2 }))
-        end)
-
-        describe("sampled time section", function()
+        describe("played time section", function()
             local function timeSection(rates)
                 local sections = Ledger.BuildRatePanelSections(rates)
                 assert.are.equal(2, #sections)
@@ -197,41 +193,128 @@ describe("core/rate.lua", function()
             end
 
             it("comes after the rate section, with the session's and the level's time", function()
-                local section = timeSection({ sessionRate = 1, levelRate = 2, sessionSamples = 725, levelSamples = 5025 })
+                local section = timeSection({ sessionRate = 1, levelRate = 2, sessionPlayed = 725, levelPlayed = 5025 })
 
-                assert.are.equal("Sampled time", section.title)
+                assert.are.equal("Played time", section.title)
                 assert.are.equal("This session", section.rows[1].label)
                 assert.are.equal("12m 05s", section.rows[1].value)
                 assert.are.equal("This level", section.rows[2].label)
                 assert.are.equal("1h 23m", section.rows[2].value)
             end)
 
-            it("says the time is sampled by the addon and may differ from the played time, without calling it an error", function()
-                local section = timeSection({ sessionSamples = 10, levelSamples = 10 })
-                local text = table.concat(section.notes, " ")
+            it("is always there, even with a nil rates table", function()
+                local sections = Ledger.BuildRatePanelSections(nil)
 
-                assert.is_truthy(text:find("sampled by the addon", 1, true))
-                assert.is_truthy(text:find("differ from the real played time", 1, true))
-                assert.is_nil(text:lower():find("error", 1, true))
+                assert.are.equal(2, #sections)
+                assert.are.equal("-", sections[2].rows[1].value)
+                assert.are.equal("-", sections[2].rows[2].value)
             end)
 
-            it("a missing count shows a dash instead of a made-up time", function()
-                local section = timeSection({ sessionSamples = 90, levelSamples = nil })
+            it("has no 'sampled by the addon' note: these are exact clocks", function()
+                local section = timeSection({ sessionPlayed = 10, levelPlayed = 10 })
+
+                assert.is_nil(section.notes)
+            end)
+
+            it("a level time not received yet shows a dash, never a zero", function()
+                local section = timeSection({ sessionPlayed = 90, levelPlayed = nil })
 
                 assert.are.equal("1m 30s", section.rows[1].value)
+                assert.are.equal("-", section.rows[2].value)
+            end)
+
+            it("is independent of the activity samples", function()
+                local section = timeSection({ sessionSamples = 9999, levelSamples = 9999 })
+
+                assert.are.equal("-", section.rows[1].value)
                 assert.are.equal("-", section.rows[2].value)
             end)
         end)
     end)
 
-    describe("ComputeHeadlineRates: sample counts", function()
-        it("passes the sample counts through, even when they are too few for a rate", function()
+    describe("ComputeHeadlineRates: only rates", function()
+        it("returns just the two rates, no sample counts nor times", function()
             local session = Ledger.NewSession(0, 5, nil, false)
             local rates = Ledger.ComputeHeadlineRates(session, { session }, 30, 3600, true)
 
-            assert.are.equal(30, rates.sessionSamples)
-            assert.are.equal(3600, rates.levelSamples)
             assert.is_nil(rates.sessionRate)
+            assert.are.equal(0, rates.levelRate)
+            assert.is_nil(rates.sessionSamples)
+            assert.is_nil(rates.levelSamples)
+            assert.is_nil(rates.sessionPlayed)
+            assert.is_nil(rates.levelPlayed)
+        end)
+    end)
+
+    describe("SessionPlayedSeconds", function()
+        it("is now - t0, both absolute time()", function()
+            local session = Ledger.NewSession(1000, 10)
+
+            assert.are.equal(725, Ledger.SessionPlayedSeconds(session, 1725))
+        end)
+
+        it("is 0 at the very start and never negative", function()
+            local session = Ledger.NewSession(1000, 10)
+
+            assert.are.equal(0, Ledger.SessionPlayedSeconds(session, 1000))
+            assert.are.equal(0, Ledger.SessionPlayedSeconds(session, 990))
+        end)
+
+        it("is nil (a dash) without a session or without a t0", function()
+            assert.is_nil(Ledger.SessionPlayedSeconds(nil, 1000))
+            assert.is_nil(Ledger.SessionPlayedSeconds({}, 1000))
+        end)
+
+        it("does not read the activity samples", function()
+            local session = Ledger.NewSession(1000, 10)
+            session.ticks.total = 5
+
+            assert.are.equal(100, Ledger.SessionPlayedSeconds(session, 1100))
+        end)
+    end)
+
+    describe("level played time (in-memory /played reference)", function()
+        it("NewLevelPlayedRef keeps level, seconds and the reception time", function()
+            assert.are.same({ level = 12, seconds = 2472, receivedAt = 5000 },
+                Ledger.NewLevelPlayedRef(12, 2472, 5000))
+        end)
+
+        it("NewLevelPlayedRef gives nil for a reading that is not a number", function()
+            assert.is_nil(Ledger.NewLevelPlayedRef(12, nil, 5000))
+            assert.is_nil(Ledger.NewLevelPlayedRef(12, "x", 5000))
+        end)
+
+        it("is the reading plus the time elapsed since it arrived", function()
+            local ref = Ledger.NewLevelPlayedRef(12, 2472, 5000)
+
+            assert.are.equal(2472, Ledger.LevelPlayedSeconds(ref, 12, 5000))
+            assert.are.equal(2472 + 90, Ledger.LevelPlayedSeconds(ref, 12, 5090))
+        end)
+
+        it("is nil (a dash, not a zero) until a reply has arrived", function()
+            assert.is_nil(Ledger.LevelPlayedSeconds(nil, 12, 5000))
+        end)
+
+        it("a new reply REPLACES the reference instead of adding to it", function()
+            local first = Ledger.NewLevelPlayedRef(12, 2472, 5000)
+            -- e.g. after a /reload: the server's new value already includes
+            -- everything before, so nothing of `first` may be carried over.
+            local second = Ledger.NewLevelPlayedRef(12, 2600, 5100)
+
+            assert.are.equal(2472 + 50, Ledger.LevelPlayedSeconds(first, 12, 5050))
+            assert.are.equal(2600 + 50, Ledger.LevelPlayedSeconds(second, 12, 5150))
+        end)
+
+        it("a reading of another level is not shown as this level's (counter resets on a ding)", function()
+            local ref = Ledger.NewLevelPlayedRef(12, 2472, 5000)
+
+            assert.is_nil(Ledger.LevelPlayedSeconds(ref, 13, 5010))
+        end)
+
+        it("elapsed time never goes negative", function()
+            local ref = Ledger.NewLevelPlayedRef(12, 2472, 5000)
+
+            assert.are.equal(2472, Ledger.LevelPlayedSeconds(ref, 12, 4990))
         end)
     end)
 

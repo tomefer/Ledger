@@ -7,13 +7,13 @@
 
 local ADDON_NAME, Ledger = ...
 
--- RequestTimePlayed only feeds an INFORMATIONAL reading (the /played
--- line in /ldg check: nothing is calculated from it), and its presence
--- across client builds is exactly the kind of thing /ldg probe exists to
--- check -- so it's never called bare: a build where it's missing or
--- errors just skips the reading instead of breaking the handler that
--- called this. Exposed so /ldg check can ask for a fresh reading when
--- its window opens.
+-- RequestTimePlayed only feeds DISPLAY-ONLY readings (the /played line
+-- in /ldg check and the level's played time in the rate panel: nothing
+-- is calculated from either), and its presence across client builds is
+-- exactly the kind of thing /ldg probe exists to check -- so it's never
+-- called bare: a build where it's missing or errors just skips the
+-- reading instead of breaking the handler that called this. Exposed so
+-- /ldg check can ask for a fresh reading when its window opens.
 local function SafeRequestTimePlayed()
     if type(RequestTimePlayed) == "function" then
         pcall(RequestTimePlayed)
@@ -541,6 +541,10 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
             "PLAYER_LEVEL_UP t=%.3f newLevel(arg1)=%s UnitLevel=%s cached previousLevel=%s",
             t, tostring(arg1), tostring(UnitLevel("player")), tostring(previousLevel)))
         Ledger.UpdateXP()
+        -- The server's per-level played counter restarts on a ding: ask
+        -- again so the rate panel's level time follows (until the reply
+        -- lands it shows a dash, see Ledger.LevelPlayedSeconds).
+        SafeRequestTimePlayed()
 
     elseif event == "PLAYER_DEAD" then
         -- Level death counter, separate from the "dead" activity counter
@@ -554,11 +558,16 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
 
     elseif event == "TIME_PLAYED_MSG" then
         -- arg1 = the CHARACTER's total played time, arg2 = time played
-        -- on the current level. INFORMATIONAL ONLY: arg2 is kept in its
-        -- own field (LedgerCharDB.played, together with how many
-        -- samples the level had at that moment) and takes part in no
-        -- calculation and no metric -- the only reader is /ldg check.
+        -- on the current level. DISPLAY ONLY, takes part in no
+        -- calculation and no metric. arg2 goes to two places:
+        -- - LedgerCharDB.played (persisted, together with how many
+        --   samples the level had at that moment): only /ldg check reads it.
+        -- - Ledger.levelPlayedRef (IN MEMORY, never persisted, with the
+        --   time() of this reception): the rate panel shows it plus the
+        --   time elapsed since. Each reply REPLACES the ref, never adds
+        --   to it (Ledger.NewLevelPlayedRef).
         Ledger.RecordPlayedReading(LedgerCharDB, UnitLevel("player"), arg2)
+        Ledger.levelPlayedRef = Ledger.NewLevelPlayedRef(UnitLevel("player"), arg2, time()) or Ledger.levelPlayedRef
         if Ledger.checkFrame and Ledger.checkFrame:IsShown() then
             Ledger.RenderCheckFrame()
         end

@@ -319,13 +319,11 @@ nivel siguen contando a través del reset.
 **Se muestra siempre en PORCENTAJE** (`Ledger.TickPercent(ticks, clave)` =
 `ticks[clave] / ticks.total * 100`, 0 si no hay muestras): sobre el total
 de muestras del nivel o de la sesión. Nunca en valores absolutos, para no
-invitar a cuadrarlos con nada externo (el `/played`, el reloj). **Única
-excepción, pedida a propósito**: el panel del número de xp/hora
-(`/ldg rate`) muestra el tiempo muestreado de la sesión y del nivel
-(`Ledger.FormatDuration(muestras)`, ver "Número principal de xp/hora"),
-rotulado como tiempo muestreado por el addon que puede no coincidir con
-el jugado real; ni las barras ni sus tooltips lo muestran. Un
-porcentaje se deriva al mostrar y NUNCA se persiste. Formateadores puros:
+invitar a cuadrarlos con nada externo (el `/played`, el reloj). Los
+tiempos que sí muestra el panel del número de xp/hora (`/ldg rate`) ya
+no salen de las muestras: son relojes exactos, aparte (ver "Número
+principal de xp/hora"). Un porcentaje se deriva al mostrar y NUNCA se
+persiste. Formateadores puros:
 `Ledger.FormatTickLines` (una línea por actividad, para la barra) y
 `Ledger.FormatTickSummary` (una línea, para `/ldg dump` y `/ldg check`).
 (Los volcados de datos, `/ldg export`, sí escriben los contadores crudos:
@@ -667,12 +665,26 @@ Lo único que queda de `/played`:
   el tiempo que pase entre la petición y la lectura los desfase) y el
   nivel del jugador al llegar la respuesta.
 - **No participa en ningún cálculo ni en ninguna métrica.** El único
-  lector es `/ldg check`, como línea informativa (ver "Reconciliación").
+  lector de `LedgerCharDB.played` es `/ldg check`, como línea informativa
+  (ver "Reconciliación").
+- **Además, una referencia SOLO EN MEMORIA** (`Ledger.levelPlayedRef =
+  { level=, seconds=, receivedAt= }`, `Ledger.NewLevelPlayedRef`,
+  `core/rate.lua`; asignada en el handler de `TIME_PLAYED_MSG` con el
+  `time()` de la recepción, nunca persistida, nunca dentro de `levels` ni
+  `sessions`): la lee el panel de `/ldg rate` para el tiempo jugado del
+  nivel (ver "Número principal de xp/hora"). Cada respuesta **reemplaza**
+  la referencia, nunca se acumula (tras un `/reload` el valor nuevo ya
+  incluye lo anterior). Es solo para mostrar: no alimenta ningún xp/hora ni
+  otra métrica, y no es una línea base persistida.
 - Se pide (`RequestTimePlayed`, siempre envuelto en `pcall`:
-  `Ledger.RequestPlayedReading`) en `PLAYER_ENTERING_WORLD`, tras un
-  `/ldg wipe confirm` y al abrir o refrescar la ventana de `/ldg check`;
-  al llegar la respuesta con esa ventana abierta se vuelve a pintar. Ya no
-  se pide al cerrar nivel (en ese instante daría ~0).
+  `Ledger.RequestPlayedReading`) en `PLAYER_ENTERING_WORLD`, en
+  `PLAYER_LEVEL_UP` (el contador del nivel se reinicia en el servidor),
+  tras un `/ldg wipe confirm` y al abrir o refrescar la ventana de
+  `/ldg check`; al llegar la respuesta con esa ventana abierta se vuelve a
+  pintar. No se pide al cerrar nivel desde el cierre en sí (en ese instante
+  daría ~0; la petición del `PLAYER_LEVEL_UP` solo sirve para el reloj del
+  panel de rate). Cada respuesta imprime además la línea de "tiempo
+  jugado" de Blizzard en el chat, como siempre.
 
 ### Barra de composición de xp (`core/xp_bar.lua` + `ui/xp_bar.lua`, `/ldg bar`)
 
@@ -1026,8 +1038,9 @@ absoluta y nada de esto aplica.
   "Muestreo de actividad"). Decisión de esta reescritura: el xp/hora
   necesita un denominador y no se le permite usar tiempo de pared; el
   total de muestras es la única fuente que queda. El número principal es
-  una tasa (horas, no un tiempo mostrado); el tiempo muestreado solo se
-  muestra en el panel al pasar el ratón (ver más abajo).
+  una tasa (horas, no un tiempo mostrado); el tiempo jugado (ya no
+  muestreado) solo se muestra en el panel al pasar el ratón, y ese sí es
+  un reloj exacto que NO entra en la tasa (ver más abajo).
 - **Guion con menos de 60 muestras** (`Ledger.RATE_MIN_SAMPLES = 60`,
   `core/rate.lua: Ledger.ComputeXPRate`): por debajo de ese umbral el
   denominador es tan pequeño que la tasa sale disparada (50xp en 5
@@ -1065,23 +1078,40 @@ secciones que vive en `core/rate.lua`, pensada para crecer sin
 rehacerse.
 
 - **`Ledger.BuildRatePanelSections(rates)`** (pura, `rates =
-  { sessionRate=, levelRate=, sessionSamples=, levelSamples= }` ya
-  calculado por `Ledger.ComputeHeadlineRates`, que pasa los recuentos de
-  muestras tal cual): devuelve `{ { title=, rows = {
+  { sessionRate=, levelRate=, sessionPlayed=, levelPlayed= }`: las dos
+  tasas salen de `Ledger.ComputeHeadlineRates` y los dos tiempos, en
+  segundos o `nil`, los añade `ui/rate_frame.lua` en cada refresco): devuelve `{ { title=, rows = {
   {label=, value=, color=}, ... }, notes = { "línea", ... } }, ... }`
   (`notes` opcional: líneas de texto tras las filas, en
   `Ledger.RATE_NOTE_COLOR`) — hoy dos secciones. `"XP/hour"`, con dos filas
   (`"This session"`, el mismo número que el
   frame principal, en `Ledger.RATE_HIGHLIGHT_COLOR` blanco; `"This
-  level"`, en `Ledger.RATE_DEFAULT_COLOR` gris claro). `"Sampled time"`
-  (solo si `rates` trae recuentos de muestras): `"This session"` y `"This
-  level"` como duración (`Ledger.FormatDuration`: `45s`, `12m 05s`,
-  `1h 23m` — desde la hora se quitan los segundos), derivada de los
-  mismos contadores de actividad (1 muestra = 1s), con la nota `"Time
-  sampled by the addon; it may differ from the real played time."`: es lo
-  que el addon observó (el muestreador solo corre con el cliente en marcha),
-  no un tiempo jugado, y una diferencia con `/played` o el reloj es
-  esperable, no un fallo. Añadir el
+  level"`, en `Ledger.RATE_DEFAULT_COLOR` gris claro). `"Played time"`
+  (siempre presente; antes `"Sampled time"`, derivada de las muestras):
+  `"This session"` y `"This level"` como duración
+  (`Ledger.FormatDuration`: `45s`, `12m 05s`, `1h 23m` — desde la hora
+  se quitan los segundos; `nil` → `-`), **relojes exactos, solo para
+  mostrar** — no se persisten, no entran en `levels` ni `sessions` ni
+  alimentan ningún xp/hora u otra métrica (las muestras siguen siendo la
+  única fuente del reparto de actividad y del denominador de la tasa).
+  Ya no lleva la nota de "tiempo muestreado".
+  - **Sesión** (`Ledger.SessionPlayedSeconds(session, now)`):
+    `time() - session.t0`. **Ojo, límite conocido**: da por hecho que se
+    está conectado de principio a fin de la sesión, pero una sesión
+    guardada se reanuda tras un relog (`StartTracking: resuming saved
+    sessions`, con su `t0` original), así que en un cliente que sí cargue
+    los SavedVariables (Classic Era) el tiempo desconectado entre medias
+    cuenta como jugado. En la beta de WoW Forever (que no los carga al
+    arrancar, ver "SavedVariables en la beta") cada arranque es una
+    sesión en frío y no ocurre. Ver "Pendiente".
+  - **Nivel** (`Ledger.LevelPlayedSeconds(ref, nivelActual, now)`):
+    `ref.seconds + (time() - ref.receivedAt)`, con `ref =
+    Ledger.levelPlayedRef` (ver "`/played`"). `nil` (guion, nunca un 0)
+    mientras no haya llegado ninguna respuesta, o si la referencia es de
+    otro nivel (`ref.level ~= UnitLevel`: tras un ding, hasta que llega la
+    respuesta nueva no se enseña el tiempo del nivel viejo como el del
+    nuevo).
+  Añadir el
   histórico de últimos niveles o un desglose por origen más adelante es
   añadir otra entrada a esta lista — `ui/rate_frame.lua:
   RenderHoverPanel` recorre secciones y filas genéricamente, sin
@@ -1718,3 +1748,16 @@ falta en el `.toc`).
   al cambiar de dígitos; que arrastrarlo y volver a entrar al juego
   respete `LedgerDB.ratePos`; y que el guion aparezca de verdad al
   abrir una sesión nueva y desaparezca pasado el minuto.
+- **Verificar en el juego el tiempo jugado del panel de rate** (nunca
+  probado, solo con tests de la parte pura): que `TIME_PLAYED_MSG` llegue
+  tras `RequestTimePlayed()` en `PLAYER_ENTERING_WORLD` y en
+  `PLAYER_LEVEL_UP` en ambos clientes; que "This level" enseñe un guion
+  hasta que llega y luego avance segundo a segundo; que tras un ding se
+  reinicie a ~0 y no enseñe el tiempo del nivel viejo; que tras un
+  `/reload` el valor nuevo no se acumule sobre el anterior; y que "This
+  session" cuadre con el reloj. **Límite conocido de "This session"**
+  (`time() - t0`): tras un relog en un cliente que reanuda sesiones
+  guardadas incluye el tiempo desconectado; decidir junto con el primer
+  punto de esta lista (sesión abierta tras un logout) si eso se acepta, si
+  se abre sesión nueva tras un hueco largo o si el reloj de sesión debe
+  medirse desde la carga del addon.
