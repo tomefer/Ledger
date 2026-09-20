@@ -68,15 +68,17 @@ local function LayoutBorder()
 end
 
 -- Anchors the parallel frame to the xp bar: same width and horizontal
--- position, same height, 2px gap above it. Returns the width, or nil if
--- the xp bar doesn't have a valid size yet (e.g. it has never anchored
--- to the native bar).
+-- position, same height, 2px gap above it. The points are set whatever
+-- the xp bar's width is (they follow it live, and the xp/hour number
+-- hangs from this frame, so it must be anchored from the start); returns
+-- the width, which can still be 0 while the native bar has no final
+-- layout yet -- the caller must not paint then.
 local function AnchorToXPBar()
     local xpBar = Ledger.xpBarFrame
-    local width = xpBar and xpBar:GetWidth()
-    if not width or width <= 0 then
+    if not xpBar then
         return nil
     end
+    local width = xpBar:GetWidth() or 0
 
     frame:SetSize(width, xpBar:GetHeight())
     frame:ClearAllPoints()
@@ -115,7 +117,7 @@ end
 function Ledger.RedrawTimeBar()
     if not frame:IsShown() then return end
     local width = AnchorToXPBar()
-    if not width then return end
+    if not width or width <= 0 then return end
 
     PaintSegments(Ledger.ComputeTimeBarSegments(LedgerCharDB.levelTicks, width))
 end
@@ -128,12 +130,14 @@ function Ledger.ToggleTimeBar()
     if frame:IsShown() then
         frame:Hide()
         LedgerDB.timeBarShown = false
+        Ledger.RestoreRatePosition() -- the xp/hour number drops back onto the xp bar
         return false
     end
 
     frame:Show()
     LedgerDB.timeBarShown = true
     Ledger.RedrawTimeBar()
+    Ledger.RestoreRatePosition() -- ...and stacks on top of this bar again
     return true
 end
 

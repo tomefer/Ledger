@@ -16,9 +16,13 @@ Ledger.DEFAULTS = {
     pos             = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
     shown           = false,
     includeRested   = true,
-    barShown        = false,
+    -- The three views (xp composition bar, activity bar, xp/hour number)
+    -- are visible by default. A stored value always wins over these, so a
+    -- view hidden on purpose stays hidden (see Ledger.ApplyViewDefaultsOnce
+    -- for the one exception).
+    barShown        = true,
     barHeight       = 8,
-    timeBarShown    = false,
+    timeBarShown    = true,
     -- Fallback position/width for the xp composition bar when no
     -- native bar can be found to anchor to (ui/xp_bar.lua:
     -- DegradedAnchor). barDefaultPos is overwritten in LedgerDB once
@@ -26,7 +30,7 @@ Ledger.DEFAULTS = {
     -- user-configurable (no resize handle), just a sane fixed size.
     barDefaultPos   = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 120 },
     barDefaultWidth = 200,
-    rateShown       = false,
+    rateShown       = true,
     -- No ratePos default on purpose: nil means "anchor above the xp
     -- bar" (ui/rate_frame.lua: RestoreRatePosition). Only gets set
     -- once the player actually drags the headline number frame.
@@ -52,6 +56,27 @@ function Ledger.InitDB(db, defaults)
         end
     end
     db.version = Ledger.DB_VERSION
+    return db
+end
+
+-- The view toggles in LedgerDB that default to visible.
+Ledger.VIEW_KEYS = { "barShown", "timeBarShown", "rateShown" }
+
+-- One-time reset of the view toggles to their (now visible) defaults.
+-- Those three used to default to false, and InitDB stamped that false into
+-- LedgerDB on the first load, so on a client that persists SavedVariables
+-- a stored false is not a preference: it can't be told apart from a view
+-- the player never touched. Without this, the new defaults would never
+-- reach anyone who already had a LedgerDB. The marker makes it run once;
+-- from then on a stored value is a real choice and always wins. Call it
+-- right after InitDB. Returns db.
+function Ledger.ApplyViewDefaultsOnce(db)
+    if not db.viewDefaultsApplied then
+        for _, key in ipairs(Ledger.VIEW_KEYS) do
+            db[key] = Ledger.DEFAULTS[key]
+        end
+        db.viewDefaultsApplied = true
+    end
     return db
 end
 

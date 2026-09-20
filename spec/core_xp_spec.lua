@@ -56,6 +56,68 @@ describe("core/xp.lua", function()
         end)
     end)
 
+    describe("visibility of the three views (bar / time / rate)", function()
+        local VIEWS = { "barShown", "timeBarShown", "rateShown" }
+
+        it("are visible by default when there is no saved preference", function()
+            local db = Ledger.ApplyViewDefaultsOnce(Ledger.InitDB(nil, Ledger.DEFAULTS))
+
+            for _, key in ipairs(VIEWS) do
+                assert.is_true(db[key], key)
+            end
+        end)
+
+        it("the main panel stays hidden by default", function()
+            assert.is_false(Ledger.InitDB(nil, Ledger.DEFAULTS).shown)
+        end)
+
+        it("VIEW_KEYS lists exactly those three", function()
+            assert.are.same(VIEWS, Ledger.VIEW_KEYS)
+        end)
+
+        it("a view hidden on purpose stays hidden across later loads", function()
+            -- first load under the new defaults
+            local db = Ledger.ApplyViewDefaultsOnce(Ledger.InitDB(nil, Ledger.DEFAULTS))
+            -- the player hides two of them (what /ldg bar and /ldg rate save)
+            db.barShown, db.rateShown = false, false
+
+            -- next login: the client hands the saved table back
+            db = Ledger.ApplyViewDefaultsOnce(Ledger.InitDB(db, Ledger.DEFAULTS))
+
+            assert.is_false(db.barShown)
+            assert.is_true(db.timeBarShown)
+            assert.is_false(db.rateShown)
+        end)
+
+        it("a saved true is kept as well", function()
+            local db = Ledger.ApplyViewDefaultsOnce(Ledger.InitDB({ viewDefaultsApplied = true, barShown = true }, Ledger.DEFAULTS))
+
+            assert.is_true(db.barShown)
+        end)
+
+        it("one-time: a LedgerDB from before the change (false stamped by the old defaults) becomes visible", function()
+            -- what the old InitDB wrote on the first load, never a choice
+            local old = { version = 9, shown = false, barShown = false, timeBarShown = false, rateShown = false, barHeight = 8 }
+
+            local db = Ledger.ApplyViewDefaultsOnce(Ledger.InitDB(old, Ledger.DEFAULTS))
+
+            for _, key in ipairs(VIEWS) do
+                assert.is_true(db[key], key)
+            end
+            assert.is_true(db.viewDefaultsApplied)
+        end)
+
+        it("does not touch anything else in LedgerDB", function()
+            local db = Ledger.ApplyViewDefaultsOnce(Ledger.InitDB(
+                { includeRested = false, shown = true, ratePos = { point = "TOP", relativePoint = "TOP", x = 1, y = 2 } },
+                Ledger.DEFAULTS))
+
+            assert.is_false(db.includeRested)
+            assert.is_true(db.shown)
+            assert.are.same({ point = "TOP", relativePoint = "TOP", x = 1, y = 2 }, db.ratePos)
+        end)
+    end)
+
     describe("InitCharDB (per-character data)", function()
         it("nil table: creates the full structure from scratch, not reported as a wipe", function()
             local db, wiped, oldVersion = Ledger.InitCharDB(nil)

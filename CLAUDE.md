@@ -66,6 +66,11 @@ vez de suponer.
   - `/ldg rested`: alterna `LedgerDB.includeRested` (si el bono por
     descanso cuenta en `TotalXP`/`CloseLevel`; ver "Series declarativas"
     arriba) y actualiza la etiqueta del panel principal.
+  - **Las tres vistas (`/ldg bar`, `/ldg time`, `/ldg rate`) están
+    visibles por defecto** (`Ledger.DEFAULTS`: `barShown`, `timeBarShown`,
+    `rateShown` = `true`; ver "SavedVariables"). Los comandos siguen
+    alternando igual y guardan la elección, que manda en el siguiente
+    login.
   - `/ldg bar`: muestra u oculta la barra de composición de xp del
     nivel, anclada sobre la barra de xp nativa (ver "Barra de
     composición de xp" más abajo). Informa directamente por chat de si
@@ -76,7 +81,8 @@ vez de suponer.
     (combat/non-combat/travel/dead, siempre en porcentaje de muestras),
     independiente de `/ldg bar` (ver "Barra de actividad" más abajo).
   - `/ldg rate`: muestra u oculta el número destacado de xp/hora de la
-    sesión actual, anclado encima de la barra de composición de xp;
+    sesión actual, anclado encima de la pila de barras visibles (ver
+    "Número principal de xp/hora" más abajo);
     pasar el ratón por encima abre un panel propio con el desglose
     sesión/nivel (ver "Número principal de xp/hora" más abajo).
   - `/ldg wipe confirm`: borra por completo `LedgerCharDB` (todas las
@@ -825,6 +831,14 @@ solo cómo esa herramienta representa un frame sin nombre).
   ninguna constante de anchura hardcodeada salvo
   `Ledger.DEFAULTS.barDefaultWidth`, que es explícitamente el valor de
   emergencia, no el camino normal.
+- **La barra se ancla aunque esté oculta** (`Ledger.RedrawXPBarFull`:
+  ancla siempre, pinta solo si está visible): la barra de actividad y el
+  número de xp/hora cuelgan de este frame, así que necesita sus puntos de
+  anclaje aunque el jugador la haya ocultado a propósito; si no, tras un
+  `/reload` con solo esta oculta las otras dos quedaban sin ancla e
+  invisibles (WoW no dibuja un frame con el ancla sin resolver).
+  `PLAYER_LOGIN` (`ui/events.lua`) la llama siempre, y las otras dos se
+  muestran y anclan después, en orden.
 - **Reancla en `PLAYER_ENTERING_WORLD` y `UI_SCALE_CHANGED`**
   (`ui/events.lua`): ambos disparan `Ledger.RedrawXPBarFull()` +
   `Ledger.RedrawTimeBar()`, que vuelven a resolver el ancla desde cero
@@ -882,17 +896,25 @@ externo) — las dos barras no son comparables píxel a píxel.
 
 ### Número principal de xp/hora (`core/rate.lua` + `ui/rate_frame.lua`, `/ldg rate`)
 
-Frame propio, "destacado" (`SetFrameStrata("HIGH")`, por encima de las
-barras de xp/tiempo si llegaran a solaparse), anclado justo encima de
-la barra de composición de xp — `frame:SetPoint("BOTTOM",
-Ledger.xpBarFrame, "TOP", 0, 2)`, un único punto de anclaje que centra
-horizontalmente por construcción (`"BOTTOM"`/`"TOP"` son ya el
-centro-superior/centro-inferior del frame, no una esquina) y con 2px de
-separación. Como es una relación de anclaje viva de WoW, no hace falta
-re-anclar nunca tras el primer `SetPoint`: el número sigue a
-`Ledger.xpBarFrame` automáticamente aunque ese frame se mueva o
-redibuje (incluido su propio modo degradado — ver "Localización de la
-barra nativa" arriba), sin ningún código adicional aquí.
+Frame propio, "destacado" (`SetFrameStrata("HIGH")`), anclado encima de
+la barra visible más alta. **La pila, de abajo arriba** (2px entre cada
+una, salvo 1px entre la barra nativa y la de xp): barra nativa → barra de
+composición de xp → barra de actividad → este número. Si la barra de
+actividad está visible el número se ancla a ELLA (`frame:SetPoint("BOTTOM",
+Ledger.timeBarFrame, "TOP", 0, 2)`); si no, a la de xp
+(`Ledger.xpBarFrame`). Anclar siempre a la de xp (lo que hacía antes, con
+las barras nunca visibles a la vez) pintaba el número encima de la barra
+de actividad, que ya ocupa ese hueco. Un único punto de anclaje
+(`"BOTTOM"`/`"TOP"` son el centro-inferior/centro-superior del frame, no
+una esquina) centra horizontalmente por construcción. Es una relación de
+anclaje viva de WoW, así que sigue a la barra aunque se mueva o redibuje
+(incluido el modo degradado de la barra de xp — ver "Localización de la
+barra nativa" arriba); solo hay que re-anclar cuando cambia CUÁL es la
+barra más alta: `Ledger.RestoreRatePosition()` (que lee
+`Ledger.timeBarFrame:IsShown()`) se llama en `PLAYER_LOGIN`, después de
+fijar la visibilidad de la barra de actividad, y en `ToggleTimeBar`. Si el
+jugador ha arrastrado el número (`LedgerDB.ratePos`), manda esa posición
+absoluta y nada de esto aplica.
 
 - **El número**: xp/hora de la **sesión activa** (`Ledger.TotalXP(session,
   includeRested) / session.ticks.total * 3600`, ver
@@ -1330,10 +1352,28 @@ arriba:
 - `LedgerDB` (cuenta, `## SavedVariables`): `pos`, `shown`, `version`,
   `includeRested` (toggle de `/ldg rested`, `true` por defecto),
   `barShown`/`barHeight`/`timeBarShown` (barras), `barDefaultPos`/
-  `barDefaultWidth`, `rateShown`, `ratePos`. **Nunca se borra por cambio de
-  versión**: son ajustes de interfaz que no dependen del esquema de datos;
-  `Ledger.InitDB(db, defaults)` solo rellena lo que falte y estampa la
-  versión.
+  `barDefaultWidth`, `rateShown`, `ratePos`, `viewDefaultsApplied`.
+  **Nunca se borra por cambio de versión**: son ajustes de interfaz que no
+  dependen del esquema de datos; `Ledger.InitDB(db, defaults)` solo rellena
+  lo que falte y estampa la versión.
+  - **Visibilidad de las tres vistas**: `barShown`, `timeBarShown` y
+    `rateShown` valen `true` por defecto (`Ledger.DEFAULTS`); un valor
+    guardado siempre manda (`InitDB` nunca pisa lo que hay), así que una
+    vista ocultada a propósito sigue oculta tras `/reload` en un cliente
+    que persista. En la beta de WoW Forever, que no carga los
+    SavedVariables previos al arranque (ver más abajo), cada arranque
+    parte de los defaults: las tres visibles.
+  - **Reseteo único** (`Ledger.ApplyViewDefaultsOnce`, `core/xp.lua`,
+    llamado tras `InitDB` en `ADDON_LOADED`): antes esos tres valían
+    `false` por defecto y `InitDB` estampaba ese `false` en `LedgerDB` en
+    la primera carga, así que un `false` guardado por una versión
+    anterior NO es una elección (no se distingue de una vista que nunca se
+    tocó) y los nuevos defaults no habrían llegado a quien ya tenía
+    `LedgerDB`. La primera vez (sin `viewDefaultsApplied`) se ponen las
+    tres a su default y se estampa `viewDefaultsApplied = true`; desde
+    entonces cualquier valor guardado es una elección real. Coste
+    asumido: quien ocultara una vista a propósito con una versión
+    anterior la vuelve a ver una vez.
 - `LedgerCharDB` (por personaje, `## SavedVariablesPerCharacter`):
   `{ version, levels, sessions, levelTicks, played }`. `levels[level]`
   guarda el resultado de `CloseLevel` (con sus `ticks`), indexado por
@@ -1542,11 +1582,13 @@ falta en el `.toc`).
   (`Configuración → Interfaz`), no solo `PLAYER_ENTERING_WORLD`.
 - Ver visualmente en el juego el número de xp/hora y su panel al pasar
   el ratón (`/ldg rate`, ver "Número principal de xp/hora" arriba,
-  nunca probado): que el anclaje centrado 2px sobre la barra de xp se
-  vea bien (incluido cómo queda si la barra de reparto de tiempo
-  también está activa — ambas reclaman ese mismo hueco encima de la
-  barra de xp, y hoy nada evita que se solapen visualmente más allá de
-  que el número tiene una `FrameStrata` más alta); que
+  nunca probado): que el anclaje centrado 2px sobre la pila de barras se
+  vea bien con las tres visibles a la vez (comprobado solo con un cliente
+  simulado con resolutor de geometría: barra nativa, xp, actividad y
+  número apilados sin solaparse, también con la barra nativa a ancho 0 en
+  el login, con cada una oculta a propósito y en modo degradado; sin
+  confirmar en el cliente real, ni si esa altura total choca con otros
+  elementos de la interfaz sobre la barra de xp); que
   `GameFontNormalHuge` sea legible y el fondo se ajuste bien al texto
   al cambiar de dígitos; que arrastrarlo y volver a entrar al juego
   respete `LedgerDB.ratePos`; y que el guion aparezca de verdad al

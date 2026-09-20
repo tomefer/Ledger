@@ -318,15 +318,19 @@ local WIDTH_TOLERANCE = 0.5
 -- change or on login; new events within the same level use
 -- Ledger.ExtendXPBar instead.
 --
+-- The anchoring happens even while the bar is hidden: the activity bar
+-- and the xp/hour number hang from this frame, so it must always have its
+-- points -- otherwise hiding only this bar would leave them unanchored
+-- (and invisible) after a /reload. Only the painting needs it shown.
+--
 -- Returns (ok, width, segmentCount) so the caller (e.g. the /ldg bar
 -- command) can report immediately without depending on the log being
 -- enabled: ok=false if the frame is hidden or it couldn't anchor to
 -- the native bar.
 function Ledger.RedrawXPBarFull()
-    if not frame:IsShown() then return false end
     redrawing = true
     local width = AnchorToNativeBar()
-    if not width then
+    if not width or not frame:IsShown() then
         redrawing = false
         return false
     end

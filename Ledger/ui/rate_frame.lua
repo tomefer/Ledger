@@ -8,11 +8,16 @@
 local ADDON_NAME, Ledger = ...
 
 ----------------------------------------------------------------------
--- Headline number frame: anchored above the xp bar (Ledger.xpBarFrame,
--- itself always positioned -- natively or in its own degraded fallback,
--- see ui/xp_bar.lua), centered horizontally with it, 2px gap. A single
--- anchor point (BOTTOM->TOP) keeps that live relationship automatically
--- as either frame moves or resizes, with no re-anchoring needed here.
+-- Headline number frame: anchored above the topmost bar that is showing,
+-- centered horizontally with it, 2px gap. The stack, bottom to top, is
+-- native xp bar -> xp composition bar -> activity bar -> this number: the
+-- activity bar already sits 2px above the xp bar, so when it is visible
+-- this frame goes on top of IT (anchoring both to the xp bar would paint
+-- the number over the activity bar). Ledger.xpBarFrame is always
+-- positioned -- natively or in its own degraded fallback, see
+-- ui/xp_bar.lua. A single anchor point (BOTTOM->TOP) keeps that live
+-- relationship as either frame moves or resizes; it only has to be
+-- re-anchored when the activity bar is shown or hidden.
 ----------------------------------------------------------------------
 
 local PADDING_X = 12
@@ -40,8 +45,10 @@ end
 
 ----------------------------------------------------------------------
 -- Position: LedgerDB.ratePos if the player has dragged it, otherwise
--- anchored above the xp bar by default. Restored once at PLAYER_LOGIN
--- (ui/events.lua), same as ui/frame.lua's main panel.
+-- stacked above the bars by default (see above). Restored at
+-- PLAYER_LOGIN (ui/events.lua), same as ui/frame.lua's main panel, and
+-- again whenever the activity bar is toggled (ui/time_bar.lua:
+-- ToggleTimeBar), which changes what "topmost bar" means.
 ----------------------------------------------------------------------
 
 function Ledger.RestoreRatePosition()
@@ -50,7 +57,8 @@ function Ledger.RestoreRatePosition()
     if pos then
         frame:SetPoint(pos.point, UIParent, pos.relativePoint, pos.x, pos.y)
     else
-        frame:SetPoint("BOTTOM", Ledger.xpBarFrame, "TOP", 0, 2)
+        local base = Ledger.timeBarFrame:IsShown() and Ledger.timeBarFrame or Ledger.xpBarFrame
+        frame:SetPoint("BOTTOM", base, "TOP", 0, 2)
     end
 end
 

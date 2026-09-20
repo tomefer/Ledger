@@ -179,6 +179,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         -- SavedVariables are already loaded by the time our own name arrives.
         if arg1 == ADDON_NAME then
             LedgerDB = Ledger.InitDB(LedgerDB, Ledger.DEFAULTS)
+            Ledger.ApplyViewDefaultsOnce(LedgerDB)
             local wiped, oldVersion
             -- Startup diagnostics (INFO, see /ldg log show): what the
             -- client actually handed us from disk vs what we ended up
@@ -208,15 +209,20 @@ ev:SetScript("OnEvent", function(self, event, arg1)
         if LedgerDB.shown then
             Ledger.frame:Show()
         end
+        -- The three views hang from each other (native bar -> xp bar ->
+        -- activity bar -> xp/hour number), so the order matters: each one
+        -- is shown and anchored before the next reads its state.
+        -- RedrawXPBarFull anchors the xp bar even when it stays hidden,
+        -- which the other two still need.
         if LedgerDB.barShown then
             Ledger.xpBarFrame:Show()
-            Ledger.RedrawXPBarFull()
         end
+        Ledger.RedrawXPBarFull()
         if LedgerDB.timeBarShown then
             Ledger.timeBarFrame:Show()
             Ledger.RedrawTimeBar()
         end
-        Ledger.RestoreRatePosition()
+        Ledger.RestoreRatePosition() -- after the activity bar's visibility is settled
         if LedgerDB.rateShown then
             Ledger.rateFrame:Show()
             Ledger.RefreshRateFrame()
