@@ -199,6 +199,15 @@ function Ledger.AddSource(matcher, t, src, log, rested, expectedXP)
         return { t = amount.t, xp = amount.xp, src = src, rested = rested, expectedXP = expectedXP, crossing = amount.crossing }
     end
 
+    -- A source that reports its own amount as 0 (a grey quest, or any
+    -- turn-in at max level) can never explain a delta: no xp event
+    -- follows it. Queuing it anyway would let SourceRank prefer it over
+    -- the next kill's source and steal that kill's xp as "quest".
+    if expectedXP == 0 then
+        log("trace", string.format("AddSource: %s reports expectedXP=0 -- nothing to pair, not queued", src))
+        return nil
+    end
+
     log("trace", "AddSource: no amount within the margin -- queuing the source")
     table.insert(matcher.sources, { t = t, src = src, rested = rested, expectedXP = expectedXP })
     return nil
@@ -268,6 +277,11 @@ function Ledger.Flush(matcher, now, log)
     log = log or NoopLog
     local flushed = {}
 
+    -- Walked backwards so table.remove doesn't shift what is left to
+    -- visit; each release goes to the FRONT of `flushed`, so the result
+    -- keeps arrival order (oldest first). Order matters: an amount that
+    -- carries a level crossing must be emitted before whatever arrived
+    -- after it, or that later xp lands in the old level's session.
     for i = #matcher.amounts, 1, -1 do
         local item = matcher.amounts[i]
         local age = now - item.t
@@ -276,7 +290,7 @@ function Ledger.Flush(matcher, now, log)
                 "Flush: amount xp=%d age=%.3fs exceeds margin %.3fs -- released with src=unknown",
                 item.xp, age, matcher.maxGap))
             table.remove(matcher.amounts, i)
-            table.insert(flushed, { t = item.t, xp = item.xp, src = "unknown", rested = 0, crossing = item.crossing })
+            table.insert(flushed, 1, { t = item.t, xp = item.xp, src = "unknown", rested = 0, crossing = item.crossing })
         end
     end
 

@@ -78,6 +78,22 @@ describe("core/xp_gain_matcher.lua", function()
         end)
     end)
 
+    describe("several orphaned amounts", function()
+        it("Flush releases them oldest first, so a crossing is recorded before what came after it", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddAmount(m, 10.0, 40, nil, { level = 5 })
+            Ledger.AddAmount(m, 10.5, 30)
+
+            local flushed = Ledger.Flush(m, 12.0)
+
+            assert.are.equal(2, #flushed)
+            assert.are.equal(10.0, flushed[1].t)
+            assert.is_not_nil(flushed[1].crossing)
+            assert.are.equal(10.5, flushed[2].t)
+            assert.are.equal(0, #m.amounts)
+        end)
+    end)
+
     describe("source with no amount", function()
         it("simply gets discarded after the margin", function()
             local m = Ledger.NewMatcher(1)
@@ -319,6 +335,26 @@ describe("core/xp_gain_matcher.lua", function()
             -- Past questGap: discarded like any other orphaned source.
             Ledger.Flush(m, 103.5)
             assert.are.equal(0, #m.sources)
+        end)
+    end)
+
+    describe("quest source that reports 0 xp", function()
+        it("is never queued, so it can't steal the next kill's source", function()
+            local m = Ledger.NewMatcher(1)
+            assert.is_nil(Ledger.AddSource(m, 100.0, "quest", nil, 0, 0)) -- grey quest / max level
+            assert.are.equal(0, #m.sources)
+
+            Ledger.AddSource(m, 100.5, "kill", nil, 0)
+            local paired = Ledger.AddAmount(m, 100.5, 45)
+
+            assert.are.equal("kill", paired.src)
+            assert.are.equal(0, #m.sources)
+        end)
+
+        it("still queues a quest whose amount is unknown (nil), as before", function()
+            local m = Ledger.NewMatcher(1)
+            Ledger.AddSource(m, 100.0, "quest", nil, 0, nil)
+            assert.are.equal(1, #m.sources)
         end)
     end)
 
