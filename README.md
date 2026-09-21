@@ -1,63 +1,93 @@
 # Ledger
 
-A leveling analytics addon for World of Warcraft Classic Era.
+A leveling analytics addon for World of Warcraft Classic Era and the WoW
+Forever beta.
 
 Ledger records every experience gain and shows you what your current level is
-actually made of: where the XP came from, how long it took, and how much of
-your time went into fighting versus everything else.
+actually made of: where the XP came from, what you were doing while you earned
+it, and how fast it is coming in.
 
 ## What it does
 
-**Composition bar.** A segmented bar above the native XP bar, scaled to the
-same width. Each segment is a chunk of XP, coloured by source — kills, quest
-turn-ins, exploration. Rested bonus is shown as a lighter shade within each
-segment. Because it shares the native bar's scale, a mismatch between the two
-is immediately visible.
+**Composition bar.** A segmented bar that takes the place of the native XP bar
+(same position and size; only the native bar's fill is hidden, so the rest of
+the Blizzard UI is untouched). Each segment is a chunk of XP, coloured by
+source: kills, quest turn-ins, exploration. Rested bonus is shown as a lighter
+shade within each segment. `/ldg native` gives the native bar back.
 
-**Time bar.** A parallel bar showing the proportional split of the level's
-time: combat versus non-combat versus dead. Non-combat is reclassified
-retroactively once you've been out of combat past a configurable threshold.
+**Time bar.** A thin bar above it showing how the level's time splits between
+combat, non-combat, travel and dead. It is a sampler, not a stopwatch: once a
+second the addon looks at what the player is doing and adds one to exactly one
+of those four counters, so the bar is always shown as **percentages of
+samples**, never as durations.
 
-**Rates.** XP per hour for the current level, with rested bonus optionally
-excluded — useful when comparing farming spots, since rested skews the number
-for however long it lasts.
+**Rates.** An XP-per-hour number above the bars. Hover it for two figures:
 
-**Hover for detail.** Both bars have tooltips with the full breakdown:
-per-source totals and percentages, rested contribution, time split, and an
-estimate of time to next level.
+- **This session:** the XP Ledger recorded in the current session divided by
+  the session's elapsed time. Respects `/ldg rested`.
+- **This level:** the game's own XP for the level divided by the level's played
+  time (from the server's `/played` reply). It always includes rested XP,
+  because the game's value cannot be split, and ignores `/ldg rested`.
+
+Either shows a dash until it has at least a minute of data.
+
+**Hover for detail.** Hovering the bars gives one tooltip: XP by source, the
+rested contribution, and the activity split (percentages of samples) for the
+level and for the current session.
 
 ## Installation
 
-Download the latest release and extract it into:
+Copy the `Ledger/` folder from this repository into the client's AddOns folder:
 
 ```
-World of Warcraft/_classic_era_/Interface/AddOns/Ledger/
+World of Warcraft/_classic_era_/Interface/AddOns/Ledger/    (Classic Era)
+World of Warcraft/_classic_beta_/Interface/AddOns/Ledger/   (WoW Forever beta)
 ```
 
-Restart the client — new addon folders are only picked up at startup.
+The same package serves both clients (`## Interface: 11509, 16001`). Restart
+the client the first time: new addon folders are only picked up at startup.
+
+If you have the repository checked out, `./deploy.sh [classic_era|forever]`
+does the copy for you; set `LEDGER_WOW_PATH` to the WoW install root (the
+folder that contains `_classic_era_` / `_classic_beta_`).
+
+**Beta note:** the WoW Forever beta ignores SavedVariables files that pre-date
+the client's launch. That is client behaviour, not something the addon can fix:
+on the beta your data lives for a single client session.
 
 ## Commands
 
+`/ldg` (alias `/ledger`). Unknown subcommands print the help list.
+
 | Command | Description |
 |---|---|
-| `/ldg` | Toggle the main frame |
+| `/ldg` | Toggle the main panel |
 | `/ldg help` | List all commands |
-| `/ldg bar` | Toggle the XP composition bar |
-| `/ldg time` | Toggle the time breakdown bar |
-| `/ldg rested` | Toggle whether rested XP counts toward rates |
+| `/ldg bar` | Show or hide the XP composition bar |
+| `/ldg native` | Toggle the composition bar replacing the native XP bar |
+| `/ldg time` | Show or hide the activity (time) bar |
+| `/ldg rate` | Show or hide the XP/hour number |
+| `/ldg rested` | Toggle whether rested XP counts in "This session" XP/hour and in the totals stored when a level closes ("This level" always includes it) |
 | `/ldg reset` | Close the current session and start a new one |
-| `/ldg check` | Reconcile recorded XP against actual XP |
-| `/ldg export` | Dump the database for copying |
+| `/ldg wipe confirm` | Delete **all** saved sessions and levels for this character (irreversible) |
+| `/ldg check` | Reconcile recorded XP against the real value |
+| `/ldg export` | Dump the character's data (JSON/CSV) for copying |
 | `/ldg debug` | Toggle the debug panel |
 | `/ldg dump` | Print current state to chat |
-| `/ldg log <level>` | Set log level: off, error, info, trace |
+| `/ldg log <level>` | Set log level: off, error, info, trace (`log show` dumps the buffer, `log chat` toggles the chat echo) |
+| `/ldg strings` | Print the XP global strings in use, with their literal value in this client |
+| `/ldg probe` | Print a compatibility snapshot of this client build |
 
 ## How it works
 
-XP amounts always come from the delta of `UnitXP`, never from parsing chat —
-the chat message is only used to determine the *source* of the gain. That
-keeps totals exact even during multi-kill pulls, when chat messages and XP
-updates don't arrive in lockstep.
+XP amounts always come from the delta of `UnitXP`, never from parsing chat: the
+chat message is only used to determine the *source* of the gain. That keeps
+totals exact even during multi-kill pulls, when chat messages and XP updates
+don't arrive in lockstep.
+
+Each number on screen has exactly one source: the XP bar and the session rate
+come from Ledger's own record, the level rate from the game's API, and the time
+bar from the per-second sampling. They are never mixed inside one metric.
 
 Events are stored in a flat numeric array rather than a table per event, to
 keep SavedVariables small over thousands of gains per level. Raw events are

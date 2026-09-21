@@ -108,6 +108,15 @@ doesn't affect the split (combat outranks movement) but is unconfirmed until
 checked in `/ldg log show`. Unknown whether Classic Era 1.15.x has the same
 tainting.
 
+**The other sampler reads (2026-09-21).** `UnitIsDeadOrGhost`, `UnitAffectingCombat`
+and `UnitOnTaxi` are NOT known to be secret on any client, but they run every
+second, so an unguarded failure would throw once per tick. `ReadPlayerFlag` wraps
+each in a `pcall` with the boolean test inside it (testing a secret value is what
+throws, not calling the API); a failure reads as `false` and logs one ERROR per
+API per session. Purely defensive: nothing observed yet. `FindMatchingChild`
+(`ui/xp_bar.lua`) compares Blizzard's own status-bar max against `UnitXPMax`
+unguarded, also unobserved; left as is until a client shows it.
+
 ### 1.4 Deploy script
 - Flavors resolve to their own folder under the WoW install root: `_classic_era_`
   and `_classic_beta_` (the beta's real folder name on this machine, confirmed,
@@ -142,8 +151,10 @@ run, correct by design since it measures time the addon actually observed.
 
 Decisions that came with it:
 - **Counters increment live on both tables** (active session and current
-  level), so a crash loses at most the ticks since the last save, not the whole
-  level, and there is nothing to compute at close.
+  level), so there is nothing to compute at close. Durability is the client's:
+  WoW writes SavedVariables only at logout, `/reload` or a clean exit, so a
+  crash loses everything since the last write (ticks and events alike), not
+  "a few ticks". There is no API to force a save.
 - **Priority** dead > combat > moving > rest: "a corpse is not in combat, not
   even mid-fight"; moving includes taxi (`UnitOnTaxi`).
 - **Always shown as a percentage** of samples so nobody is tempted to reconcile
@@ -284,9 +295,28 @@ bonus, queue state, real pairing separation for recalibrating `MAX_MATCH_GAP`)
 logs at TRACE. `/ldg strings` prints every global string in use (both
 families) with its literal value and derived pattern.
 
+The log buffer keeps 200 lines. Over capacity the oldest **trace** line goes
+first (2026-09-21): a kill alone writes ~10 trace lines, so strict oldest-first
+eviction pushed an ERROR out of the buffer after ~20 events and `/ldg log show`
+stopped being useful for diagnosing. Only with no trace left does the oldest
+line of any level go.
+
 The `print("Ledger: core/<file>.lua")` line every `core/` file used to emit at
 load (to see which files had executed and in what order) was removed on
 2026-09-20 as leftover debugging noise.
+
+### 3.8 Matcher edge cases (fixed 2026-09-21, found by the 2026-09-20 audit)
+- **A source that reports 0 xp is never queued** (`AddSource`, `expectedXP == 0`).
+  `QUEST_TURNED_IN` fires for grey quests and at max level with `xp = 0`, and no
+  delta ever follows. Queued anyway, `SourceRank` preferred it over the next
+  kill's source (quest outranks kill), so that kill's xp was recorded as `quest`,
+  the kill source stayed orphaned and could pair with the *next* amount, and a
+  false `xp discrepancy` was logged. A source with `expectedXP == nil` (amount
+  unknown) is still queued as before.
+- **`Flush` returns orphaned amounts oldest first.** It used to walk the queue
+  backwards and emit newest first, which scrambled offsets and, when the older
+  amount carried a level `crossing`, recorded the newer xp in the OLD level's
+  session (`EmitEvent` handles it before the close).
 
 ---
 
@@ -369,7 +399,11 @@ mechanism, not a regression.
   wipe. v9 = the activity-counter model; all earlier versions and their v1→v8
   migrations were deleted. v10 = the persisted `played` reading is gone (nothing
   from `TIME_PLAYED_MSG` is stored). Reason: the schema changed too often for migrations
-  to be worth carrying.
+  to be worth carrying. Side effect worth knowing: removing an *optional* field is
+  a shape change too, so v10 wiped every character's history once. The rule stays
+  as is (a carve-out for dropped optional fields would need a judgement of what
+  counts as optional, which is exactly what the rule avoids); if it ever hurts,
+  that is the place to soften it.
 - `LedgerDB` (account) is never wiped by a version change: UI settings don't
   depend on the data schema; `Ledger.InitDB` only fills gaps and stamps the
   version.
@@ -940,6 +974,12 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   `Interface\ChatFrame\UI-ChatIM-SizeGrabber-*` textures work on 1.15.x.
 
 ### 9.3 To decide
+- **Provisional (2026-09-21): accept the relog dilution as is.** Of the three
+  options below, none changes the data model or invents a number, and the
+  alternatives don't fix it cleanly: measuring the clock from the addon load
+  would leave xp recorded before the relog in the numerator with no matching
+  time, and opening a new session after a gap changes what a session means.
+  Revisit if the diluted rate proves misleading in practice. Original entry:
 - After a logout/disconnect without a reset, the session stays open at the next
   login and keeps receiving events and samples. Undecided whether reopening
   after a long gap should open a new session instead of continuing the old one.
@@ -954,3 +994,12 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   where to show it: an automatic warning if the gap doesn't close after a while,
   a line in `/ldg dump` / the debug panel, or both.
 - The known limitation of 4.4 (xp lost when a second gain races a crossing).
+- **`/played` reply in flight across a ding (known, not protected).** A reply
+  requested before the ding that lands after it is labelled with the new level
+  (`ref.level == UnitLevel`), so for a moment "This level" divides by the OLD
+  level's played time. The 60 s threshold does not cover it (that denominator is
+  large, so the number is plausible, just diluted). What bounds it is the reply
+  requested by `PLAYER_LEVEL_UP`, which arrives right after and replaces it
+  (each reply replaces both values). Expected window: seconds; not measured on a
+  real client. Protecting it would need to tell which request a reply answers,
+  which the API doesn't allow.

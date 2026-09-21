@@ -61,6 +61,7 @@ Prohibitions:
 
 ## Known limitations
 - A second xp gain that races a level-crossing event and still has no source when the matcher rotates is lost (window under 1 s).
+- A `TIME_PLAYED_MSG` reply requested before a ding that lands after it is labelled with the new level, so "This level" divides by the old level's played time for a few seconds, until the reply requested at the ding replaces it (`docs/decisions.md` 9.3).
 - Nothing reads `Ledger.ReconciliationGap` yet; it only exists as an in-memory counter.
 - After a logout without `/ldg reset` the old session stays open at the next login (whether to open a new one after a long gap is undecided). Consequence: on a client that resumes saved sessions, `time() - session.t0` includes the offline gap, so the panel's "This session" played time is inflated and its xp/hour is diluted by it.
 
