@@ -76,8 +76,28 @@ Minimal repro for Blizzard: an addon with `## SavedVariables: XDB` and an
 the previous value. Start, `/reload` (loads), fully close the client, start
 again: `nil` arrives.
 
-### 1.3 `GetUnitSpeed` is "secret" on the beta (2026-09-18)
-On the beta (build 1.60.1) the value returned by `GetUnitSpeed` is marked
+### 1.3 "Secret" values on the beta (2026-09-18, 2026-09-21)
+Both cases are the same client mechanism: a *secret* value can be passed around,
+but code with taint can't compare, index, pattern-match or format it.
+
+**Chat messages (2026-09-21).** Looting a boss, `ExtractExploreXP` blew up with
+`attempt to index local 'msg' (a secret string value, while execution tainted by
+'Ledger')`: the `arg1` of `CHAT_MSG_SYSTEM` arrived as a secret string.
+`ui/xp_capture.lua: IsReadableMessage(msg)` (the only piece that knows; `core/`
+stays pure) uses `issecretvalue` if the client has it **and** a `pcall` probe
+(`string.find`) that doesn't assume that API exists. The `CHAT_MSG_SYSTEM` and
+`CHAT_MSG_COMBAT_XP_GAIN` handlers don't touch `arg1` (not even for `tostring`)
+when it isn't readable, and warn at ERROR once per event and session
+(`WarnSecretMessage`). Degradation: a secret `CHAT_MSG_SYSTEM` is ignored (an
+exploration xp arriving that way is released as `"unknown"` by the matcher); a
+secret `CHAT_MSG_COMBAT_XP_GAIN` is enqueued as `"kill"` with `rested = 0` (that
+event only fires for combat xp; quests pair by exact amount with priority) — an
+**assumption**, and the rested bonus of those messages is lost. The extractors
+in `core/chat_patterns.lua` also tolerate a non-string `msg` (no match).
+**Unconfirmed in game:** that the guard avoids the error on a boss, and which
+other messages arrive secret (TRACE `... msg=<secret>`).
+
+**`GetUnitSpeed` (2026-09-18).** On the beta (build 1.60.1) the value returned by `GetUnitSpeed` is marked
 "secret": the call doesn't fail, but comparing it (`> 0`) raises `attempt to
 compare a secret number value`. `ui/xp_capture.lua: IsPlayerMoving()` wraps the
 comparison in its own `pcall` and degrades to "not moving" with one ERROR line
@@ -127,11 +147,11 @@ Decisions that came with it:
 - **Priority** dead > combat > moving > rest: "a corpse is not in combat, not
   even mid-fight"; moving includes taxi (`UnitOnTaxi`).
 - **Always shown as a percentage** of samples so nobody is tempted to reconcile
-  absolute values with `/played` or the clock. The one requested exception is
-  the `/ldg rate` hover panel (sampled duration, labelled as possibly different
-  from real played time). Percentages are derived at display time, never
-  persisted. Data dumps (`/ldg export`) do write the raw counters: they are the
-  data, not a presentation.
+  absolute values with `/played` or the clock. The times the `/ldg rate` hover
+  panel shows are exact clocks kept apart, not derived from samples (see 6.5;
+  it used to show the sampled duration, replaced 2026-09-21). Percentages are
+  derived at display time, never persisted. Data dumps (`/ldg export`) do write
+  the raw counters: they are the data, not a presentation.
 - **xp/hour denominator = samples** (1 sample = 1 s), never wall-clock or
   `/played`. Time the client was stopped is not in the denominator, by design.
 - **`/played` demoted to information.** `TIME_PLAYED_MSG` (`arg2` = played time
@@ -139,9 +159,19 @@ Decisions that came with it:
   samples }` (`Ledger.RecordPlayedReading`) next to the level's sample count at
   that instant, so they can be compared without the delay between request and
   reply skewing them. Requested (always under `pcall`, `Ledger.RequestPlayedReading`)
-  on `PLAYER_ENTERING_WORLD`, after `/ldg wipe confirm`, and when `/ldg check`
-  opens or refreshes; no longer requested at level close (it would give ~0).
-  Its only reader is `/ldg check`.
+  on `PLAYER_ENTERING_WORLD`, on `PLAYER_LEVEL_UP` (the server-side level counter
+  resets; this request only feeds the rate panel's clock), after `/ldg wipe
+  confirm`, and when `/ldg check` opens or refreshes; not requested from the
+  level close itself (it would give ~0). The only reader of
+  `LedgerCharDB.played` is `/ldg check`. Each reply also prints Blizzard's
+  "time played" line to chat, as always.
+- **In-memory played reference** (`Ledger.levelPlayedRef = { level, seconds,
+  receivedAt }`, `Ledger.NewLevelPlayedRef`, `core/rate.lua`): set in the
+  `TIME_PLAYED_MSG` handler with the `time()` of reception, never persisted,
+  never inside `levels` or `sessions`. Read only by the `/ldg rate` panel for the
+  level's played time. Each reply **replaces** it (after a `/reload` the new
+  value already includes the old one); display only, feeds no xp/hour or other
+  metric.
 - Per-session and per-level counters share the shape
   `{ combat, nonCombat, travel, dead, total }` (`Ledger.NewTicks()`). At level
   close the level counters pass by reference to `entry.ticks`; a `/ldg reset`
@@ -624,19 +654,35 @@ bar's visibility is set, and in `ToggleTimeBar`. If the player dragged it
 **Hover panel** (`LedgerRateHoverPanel`, own frame, **never `GameTooltip`**,
 unlike the bars): built from a generic section structure in `core/rate.lua`.
 - `Ledger.BuildRatePanelSections(rates)` (pure, `rates = { sessionRate,
-  levelRate, sessionSamples, levelSamples }` from `ComputeHeadlineRates`)
-  returns `{ { title, rows = { {label, value, color}, ... }, notes = { "line",
-  ... } }, ... }` (`notes` optional, in `Ledger.RATE_NOTE_COLOR`): `"XP/hour"`
-  with `"This session"` (same number as the main frame, white,
-  `RATE_HIGHLIGHT_COLOR`) and `"This level"` (light grey, `RATE_DEFAULT_COLOR`);
-  and `"Sampled time"` (only if `rates` carries sample counts) with `"This
+  levelRate, sessionPlayed, levelPlayed }`: the two rates come from
+  `ComputeHeadlineRates`, the two times, in seconds or `nil`, are added by
+  `ui/rate_frame.lua` on each refresh) returns `{ { title, rows = { {label,
+  value, color}, ... }, notes = { "line", ... } }, ... }` (`notes` optional, in
+  `Ledger.RATE_NOTE_COLOR`): `"XP/hour"` with `"This session"` (same number as
+  the main frame, white, `RATE_HIGHLIGHT_COLOR`) and `"This level"` (light grey,
+  `RATE_DEFAULT_COLOR`); and `"Played time"` (always present) with `"This
   session"`/`"This level"` as a duration (`Ledger.FormatDuration`: `45s`,
-  `12m 05s`, `1h 23m`, seconds dropped from the hour up; 1 sample = 1 s) and the
-  note `"Time sampled by the addon; it may differ from the real played time."`:
-  it is what the addon observed (the sampler only runs with the client up), not
-  played time, and a difference with `/played` or the clock is expected, not a
-  fault. Adding recent-level history or a per-source breakdown later is one more
-  entry in that list; `RenderHoverPanel` walks sections and rows generically.
+  `12m 05s`, `1h 23m`, seconds dropped from the hour up; `nil` → `-`). These are
+  **exact clocks, display only**: not persisted, not in `levels`/`sessions`,
+  feeding no xp/hour or other metric (samples stay the only source of the
+  activity split and of the rate's denominator). Adding recent-level history or a
+  per-source breakdown later is one more entry in that list; `RenderHoverPanel`
+  walks sections and rows generically.
+  - **History:** the section was `"Sampled time"` (1 sample = 1 s, with a note
+    that it might differ from real played time) until 2026-09-21, when the
+    played clocks replaced it; the note went with it.
+  - **Session** (`Ledger.SessionPlayedSeconds(session, now)`): `time() -
+    session.t0`. **Known limit:** it assumes being connected from start to end of
+    the session, but a saved session resumes after a relog (`StartTracking:
+    resuming saved sessions`, with its original `t0`), so on a client that does
+    load SavedVariables (Classic Era) the offline time in between counts as
+    played. On the beta (which doesn't load them at startup, see 1.2) every start
+    is a cold session and it doesn't happen. See 9.3.
+  - **Level** (`Ledger.LevelPlayedSeconds(ref, currentLevel, now)`):
+    `ref.seconds + (time() - ref.receivedAt)`, with `ref = Ledger.levelPlayedRef`
+    (see 2.1). `nil` (a dash, never a 0) while no reply has arrived, or if the
+    reference is from another level (`ref.level ~= UnitLevel`: after a ding, the
+    old level's time is not shown as the new one's until the new reply arrives).
 - **Own colors, not `Ledger.PALETTE`:** they are about visual emphasis, not
   src/bucket identity, and `core/` must stay loadable and testable alone.
 - **Render:** pool of reusable `FontString`s (`GetOrCreateLine`); the panel
@@ -718,10 +764,12 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   Reports: `GetBuildInfo` (version, build, date, tocversion: the most direct
   check of which client a `/reload` is running on); the APIs `UnitXP`,
   `UnitXPMax`, `GetXPExhaustion`, `RequestTimePlayed`, `UnitOnTaxi`,
-  `GetUnitSpeed`, `UnitAffectingCombat`, `UnitIsDeadOrGhost` (`absent` if not a
-  function, else `pcall` with `"player"` and every returned value, trailing
-  `nil`s trimmed, or `call failed (...)`); the last four feed the activity
-  sampler; all `COMBATLOG_XPGAIN_*` globals (both families); `nativeFill`
+  `GetUnitSpeed`, `UnitAffectingCombat`, `UnitIsDeadOrGhost`, `issecretvalue`
+  (`absent` if not a function, else `pcall` with `"player"` and every returned
+  value, trailing `nil`s trimmed, or `call failed (...)`); the four before
+  `issecretvalue` feed the activity sampler; `issecretvalue` (should give
+  `false`) is what `IsReadableMessage` prefers for secret chat messages (1.3),
+  and absent only means the `pcall` probe is used instead; all `COMBATLOG_XPGAIN_*` globals (both families); `nativeFill`
   (`Ledger.nativeFillInfo`); `C_ChatInfo` presence (unused so far, a reference
   for future chat-channel filtering); `xpBarAnchor` (`Ledger.xpBarAnchorInfo`,
   `"not resolved yet"` if the bar was never redrawn this session).
@@ -790,6 +838,8 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   clients (3.5).
 - Whether Classic Era 1.15.x has the same `GetUnitSpeed` "secret" tainting
   (1.3), and confirming combat+moving never appears via `/ldg log show`.
+- That a secret `CHAT_MSG_COMBAT_XP_GAIN` is always combat xp (so enqueuing it as
+  `"kill"` is right), and which other chat messages arrive secret (1.3).
 - `UnitXPMax("player")` at `PLAYER_ENTERING_WORLD` is always the right level's
   (for the initial `previousMaxXP` cache), and a multi-level jump really fires
   `PLAYER_XP_UPDATE` once for the whole jump, not once per level.
@@ -857,6 +907,12 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   background fits when digits change; dragging it and re-entering the game
   respects `LedgerDB.ratePos`; the dash really shows on a fresh session and goes
   away after a minute.
+- **Played time in the rate panel** (only the pure part is tested):
+  `TIME_PLAYED_MSG` arrives after `RequestTimePlayed()` on
+  `PLAYER_ENTERING_WORLD` and `PLAYER_LEVEL_UP` on both clients; "This level"
+  shows a dash until it arrives and then advances second by second; after a ding
+  it resets to ~0 and doesn't show the old level's time; after a `/reload` the
+  new value doesn't accumulate on the old one; "This session" matches the clock.
 - **Windows** (`/ldg export`, `/ldg check`, `/ldg debug`; same mechanism, none
   confirmed, and `/ldg export` must still behave the same after being
   refactored onto `CreateTextWindow`): `UISpecialFrames` closes with Escape;
@@ -872,6 +928,10 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
 - After a logout/disconnect without a reset, the session stays open at the next
   login and keeps receiving events and samples. Undecided whether reopening
   after a long gap should open a new session instead of continuing the old one.
+  Decide it together with the rate panel's "This session" clock (`time() - t0`,
+  6.5), which counts the offline time after a relog on a client that resumes
+  saved sessions: accept it, open a new session after a long gap, or measure the
+  session clock from the addon load.
 - Nothing reads `Ledger.ReconciliationGap(reconciler)` to warn live if it
   fires; today only the in-memory counter exists (`ui/xp_capture.lua`). Undecided
   where to show it: an automatic warning if the gap doesn't close after a while,

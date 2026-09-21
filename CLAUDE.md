@@ -8,7 +8,7 @@ Rationale, discarded approaches, bug history, the UI design reference and open v
 - Lua 5.1: no goto, no bitwise operators, no `//`. Classic-line API only, nothing from modern retail. No external libraries, no Ace3.
 - One package, two clients: Classic Era (interface 11509) and the WoW Forever beta (16001, build 1.60.1), one `Ledger.toc` with `## Interface: 11509, 16001`. Never assume an API behaves the same on both: check with `/ldg probe`, or ask.
 - `pcall` only in `ui/`, around optional or client-dependent APIs; never in `core/`. A caught error is always logged, never swallowed.
-- The beta ignores SavedVariables that pre-date client launch (client behavior, not fixable): there data lives for one client session only. Its `GetUnitSpeed` returns a "secret" value that can't be compared (guarded by `pcall` in `IsPlayerMoving`).
+- The beta ignores SavedVariables that pre-date client launch (client behavior, not fixable): there data lives for one client session only. It also has "secret" values that tainted code can't compare or index: `GetUnitSpeed` (guarded by `pcall` in `IsPlayerMoving`) and chat message payloads (`arg1`; guarded by `IsReadableMessage` in `ui/xp_capture.lua`, which handlers must call before touching the message; `core/` extractors tolerate a non-string `msg`). Details: `docs/decisions.md` 1.3.
 
 ## Architecture
 - `Ledger/core/`: pure logic, no WoW API. Time, state, palette and anything external arrive as parameters; core never depends on `ui/`.
@@ -21,7 +21,7 @@ Rationale, discarded approaches, bug history, the UI design reference and open v
 - `src` is a numeric enum (`Ledger.SRC_IDS`/`SRC_NAMES`), persisted as an ID; translate only at the persistence boundary, everything else uses the text name.
 - Rested bonus: `Ledger.EffectiveXP` is the only place that applies `includeRested`; `TotalRested` and `bySource` are never affected by the toggle.
 - `LedgerCharDB.sessions` holds every session of the current level (last = active) and is the persisted table itself; `/ldg reset` closes a session, never deletes it. `levels[n]` is indexed by real level number. Shapes: `core/events.lua: NewSession`, `core/level_close.lua: CloseLevel`.
-- Activity is sampled, not timed: each second one counter goes up (`Ledger.ClassifyActivity`, priority dead > combat > moving > rest), live on both the session's and the level's `ticks`. Show it as a **percentage of samples**; never persist a percentage; never reconcile with the clock (only exception: the sampled-time rows of the `/ldg rate` panel; exports write raw counters). `/played` is informational only (`LedgerCharDB.played`, read only by `/ldg check`).
+- Activity is sampled, not timed: each second one counter goes up (`Ledger.ClassifyActivity`, priority dead > combat > moving > rest), live on both the session's and the level's `ticks`. Show it as a **percentage of samples**; never persist a percentage; never reconcile with the clock (exports write raw counters). `/played` is informational only (`LedgerCharDB.played`, read only by `/ldg check`). The played times in the `/ldg rate` panel are separate exact clocks (`time() - session.t0`; `Ledger.levelPlayedRef`, in memory only), display only: they never feed a rate or any metric.
 - xp/hour = xp / **samples** x 3600; `nil` (shown as `-`) below `Ledger.RATE_MIN_SAMPLES` (60).
 - Writes to `LedgerCharDB` go only through helpers (`InitCharDB`, `AppendRecord`/`AddEvent`, `RecordLevelClose`), never `db.levels[x] = y` by hand.
 - **Bump `Ledger.DB_VERSION` (`core/xp.lua`) whenever the shape of `LedgerCharDB` changes.** No migrations: on mismatch `InitCharDB` wipes the character's data and login says so in chat. `LedgerDB` (account settings) is never wiped by a version change.
@@ -40,7 +40,7 @@ Rationale, discarded approaches, bug history, the UI design reference and open v
 ## Known limitations
 - A second xp gain that races a level-crossing event and still has no source when the matcher rotates is lost (window under 1 s).
 - Nothing reads `Ledger.ReconciliationGap` yet; it only exists as an in-memory counter.
-- After a logout without `/ldg reset` the old session stays open at the next login (whether to open a new one after a long gap is undecided).
+- After a logout without `/ldg reset` the old session stays open at the next login (whether to open a new one after a long gap is undecided). Consequence: on a client that resumes saved sessions the panel's "This session" played time includes the offline gap.
 
 ## Workflow
 - Tests: `busted`. Deploy: `./deploy.sh [classic_era|forever]` copies only `Ledger/` to the client, replacing the destination; `--if-installed` deploys only where Ledger is installed; `--status` compares repo vs client (version AND contents; exit 0 in sync, 1 out of sync, 2 not installed). `LEDGER_WOW_PATH` is the WoW install **root** (the folder containing `_classic_era_`/`_classic_beta_`), never a full path and never hardcoded (the repo is public). `/reload` in game after every deploy.

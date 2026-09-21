@@ -48,10 +48,11 @@ end
 -- rules out "unknown" even if we don't recognize the message's exact
 -- format. Also returns `attempts`, the record of each entry tried (in
 -- order) with whether it matched and what it captured, so the caller
--- can log the whole attempt without repeating this loop. Pure logic:
--- does not touch any WoW API.
+-- can log the whole attempt without repeating this loop. A non-string
+-- `msg` (nil) matches nothing. Pure logic: does not touch any WoW API.
 function Ledger.ClassifyXPGainMatch(entries, msg)
     local attempts = {}
+    if type(msg) ~= "string" then return "explore", attempts end
 
     for _, entry in ipairs(entries or {}) do
         local results = { msg:find(entry.pattern) }
@@ -80,6 +81,7 @@ end
 -- "there was no bonus", same as when the message carries no suffix at
 -- all. Pure logic: does not touch any WoW API.
 function Ledger.ExtractRestedBonus(entries, msg)
+    if type(msg) ~= "string" then return 0 end
     for _, entry in ipairs(entries or {}) do
         local captured = msg:match(entry.pattern)
         if captured then
@@ -98,6 +100,7 @@ end
 -- the captured xp amount (the LAST capture: the area name comes first)
 -- or nil if nothing matches. Pure logic: does not touch any WoW API.
 function Ledger.ExtractExploreXP(entries, msg)
+    if type(msg) ~= "string" then return nil end
     for _, entry in ipairs(entries or {}) do
         local results = { msg:match(entry.pattern) }
         if #results > 0 then

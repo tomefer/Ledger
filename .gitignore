@@ -1,0 +1,5 @@
+# Personal switch that turns the Claude Code hooks off (see "Hooks" in CLAUDE.md)
+.claude/hooks.disabled
+# Personal Claude Code overrides
+.claude/settings.local.json
+.claude/worktrees/
