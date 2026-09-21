@@ -18,8 +18,8 @@ frame:SetFrameStrata("MEDIUM")
 frame:Hide()
 
 frame:SetBackdrop({
-    bgFile   = "Interface\Tooltips\UI-Tooltip-Background",
-    edgeFile = "Interface\Tooltips\UI-Tooltip-Border",
+    bgFile   = "Interface\\Tooltips\\UI-Tooltip-Background",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
     tile     = true,
     tileSize = 16,
     edgeSize = 16,
@@ -30,7 +30,7 @@ frame:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
 
 frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 frame.title:SetPoint("TOP", 0, -10)
-frame.title:SetText("XP TRACKER")
+frame.title:SetText("LEDGER")
 
 -- "12345 / 23456"
 frame.xpText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")

@@ -14,7 +14,7 @@ Ledger.SLASH_COMMANDS = {
     { name = "reset", desc = "closes the current session and opens a new manual one" },
     { name = "log",   desc = "log <off|error|info|trace> changes the level; log show dumps the buffer to the debug panel; log chat toggles the chat echo" },
     { name = "strings", desc = "prints the xp global strings in use, with their literal value in this client" },
-    { name = "rested", desc = "toggles whether the rested bonus counts in session and level xp metrics" },
+    { name = "rested", desc = "toggles whether the rested bonus counts in the \"This session\" xp/hour and in the totals stored when a level closes (the \"This level\" xp/hour ignores it: UnitXP already includes rested xp)" },
     { name = "bar", desc = "shows or hides the level's xp composition bar (it replaces the native xp bar: same place and size)" },
     { name = "native", desc = "toggles the composition bar replacing the native xp bar; off gives the native bar back and moves the composition bar above it" },
     { name = "time", desc = "shows or hides the level's activity bar (combat/non-combat/travel/dead, as a percentage of samples), independent of /ldg bar" },

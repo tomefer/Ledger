@@ -398,8 +398,10 @@ C_Timer.NewTicker(1, FlushMatcher)
 -- (core/ticks.lua) turns it into exactly one activity, and that
 -- activity's counter goes up by one -- live, on the active session's
 -- counters AND on the level in progress's (LedgerCharDB.levelTicks), so
--- a crash loses at most the ticks since the last save, never a level.
--- Nothing is stored per tick and nothing is derived later. The counters
+-- there is nothing to compute at close. Durability is the client's, not
+-- ours: SavedVariables are only written at logout, /reload or a clean
+-- exit, so a crash loses everything since the last write, ticks and
+-- events alike. Nothing is stored per tick and nothing is derived later. The counters
 -- are counts of samples, not guaranteed seconds: with the client not
 -- running the ticker doesn't run either, which is correct by design.
 ----------------------------------------------------------------------
@@ -431,15 +433,36 @@ local function IsPlayerMoving()
     return moving
 end
 
+-- Same defence for the other three sampler reads (they run every second,
+-- so an unguarded failure would throw once per tick). Not confirmed to be
+-- secret on any client yet (CLAUDE.md, /ldg probe): the boolean test sits
+-- INSIDE the pcall because testing a secret value is what throws, not
+-- calling the API. An unreadable or missing API degrades to false (that
+-- activity is never sampled) and is logged once per API per session.
+local warnedUnreadableFlag = {}
+local function ReadPlayerFlag(apiName, api)
+    local ok, flag = pcall(function() return api("player") and true or false end)
+    if not ok then
+        if not warnedUnreadableFlag[apiName] then
+            Ledger.Log("error", string.format(
+                "%s(\"player\") can't be read in this client (%s) -- that activity is never sampled this session.",
+                apiName, tostring(flag)))
+            warnedUnreadableFlag[apiName] = true
+        end
+        return false
+    end
+    return flag
+end
+
 local function SampleTimeState()
     local session = CurrentSession()
     if not session then return end
 
     Ledger.RecordActivityTick(session, LedgerCharDB.levelTicks, {
-        dead   = UnitIsDeadOrGhost("player"),
-        combat = UnitAffectingCombat("player"),
+        dead   = ReadPlayerFlag("UnitIsDeadOrGhost", UnitIsDeadOrGhost),
+        combat = ReadPlayerFlag("UnitAffectingCombat", UnitAffectingCombat),
         moving = IsPlayerMoving(),
-        taxi   = UnitOnTaxi("player"),
+        taxi   = ReadPlayerFlag("UnitOnTaxi", UnitOnTaxi),
     })
     Ledger.RedrawTimeBar()
 end
@@ -571,7 +594,9 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         -- tell one from the other (see SOURCE_PRIORITY in
         -- core/xp_gain_matcher.lua). arg2 is passed as expectedXP so
         -- EmitEvent can do the cross-check against the real delta; the
-        -- amount recorded is always still the delta's.
+        -- amount recorded is always still the delta's. A turn-in that
+        -- reports 0 xp (grey quest, max level) is dropped by AddSource
+        -- itself: no delta will ever follow it.
         local questID, questXP, questMoney = arg1, arg2, arg3
         Ledger.Log("trace", string.format(
             "QUEST_TURNED_IN t=%.3f questID=%s xp=%s money=%s",

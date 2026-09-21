@@ -69,8 +69,7 @@ end
 
 -- The whole per-second step: classifies `state` once and counts that
 -- same key live on BOTH the active session's counters and the level in
--- progress's, so a crash loses at most the ticks since the last save,
--- never a level. Returns the key.
+-- progress's, so there is nothing to compute at close. Returns the key.
 function Ledger.RecordActivityTick(session, levelTicks, state)
     local key = Ledger.ClassifyActivity(state)
     Ledger.CountTick(session.ticks, key)

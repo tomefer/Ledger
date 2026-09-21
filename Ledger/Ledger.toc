@@ -1,8 +1,8 @@
 ## Interface: 11509, 16001
 ## Title: Ledger
-## Notes: Experience tracking. Minimal skeleton.
+## Notes: Leveling analytics: what your XP is made of, where the time goes and how fast it comes in.
 ## Author: tomef
-## Version: 0.14.0
+## Version: 0.14.1
 ## SavedVariables: LedgerDB
 ## SavedVariablesPerCharacter: LedgerCharDB
 
