@@ -73,8 +73,20 @@ function Ledger.LogMessage(state, level, msg, t)
     if rank > LEVEL_RANK[state.level] then return false end
 
     table.insert(state.buffer, { t = t, level = level, msg = msg })
+    -- Over capacity the OLDEST TRACE line goes first: a kill alone writes
+    -- ~10 trace lines, so evicting strictly oldest-first pushed an ERROR
+    -- out of the buffer after ~20 events and /ldg log show stopped being
+    -- useful for diagnosing. Only when no trace is left does the plain
+    -- oldest entry go.
     while #state.buffer > Ledger.LOG_BUFFER_CAPACITY do
-        table.remove(state.buffer, 1)
+        local victim = 1
+        for i, entry in ipairs(state.buffer) do
+            if entry.level == "trace" then
+                victim = i
+                break
+            end
+        end
+        table.remove(state.buffer, victim)
     end
 
     return state.chat

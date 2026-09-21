@@ -111,6 +111,30 @@ describe("core/log.lua", function()
             assert.are.equal("msg11", state.buffer[1].msg)
             assert.are.equal("msg" .. (Ledger.LOG_BUFFER_CAPACITY + 10), state.buffer[#state.buffer].msg)
         end)
+
+        it("drops trace lines before error/info ones, so an old error survives a flood of trace", function()
+            local state = Ledger.NewLogState()
+            Ledger.LogMessage(state, "error", "the one that matters", 0)
+            Ledger.LogMessage(state, "info", "startup snapshot", 0)
+            for i = 1, Ledger.LOG_BUFFER_CAPACITY * 3 do
+                Ledger.LogMessage(state, "trace", "noise" .. i, i)
+            end
+
+            assert.are.equal(Ledger.LOG_BUFFER_CAPACITY, #state.buffer)
+            assert.are.equal("the one that matters", state.buffer[1].msg)
+            assert.are.equal("startup snapshot", state.buffer[2].msg)
+            assert.are.equal("noise" .. (Ledger.LOG_BUFFER_CAPACITY * 3), state.buffer[#state.buffer].msg)
+        end)
+
+        it("still discards the oldest entry when the buffer holds no trace at all", function()
+            local state = Ledger.NewLogState()
+            for i = 1, Ledger.LOG_BUFFER_CAPACITY + 5 do
+                Ledger.LogMessage(state, "error", "err" .. i, i)
+            end
+
+            assert.are.equal(Ledger.LOG_BUFFER_CAPACITY, #state.buffer)
+            assert.are.equal("err6", state.buffer[1].msg)
+        end)
     end)
 
     describe("FormatLogChatLine: colored chat echo", function()
