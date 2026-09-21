@@ -126,7 +126,6 @@ describe("core/xp.lua", function()
             assert.are.same({}, db.levels)
             assert.are.same({}, db.sessions)
             assert.are.same(Ledger.NewTicks(), db.levelTicks)
-            assert.is_nil(db.played)
             assert.is_false(wiped)
             assert.is_nil(oldVersion)
         end)
@@ -146,7 +145,6 @@ describe("core/xp.lua", function()
                 levels     = { [3] = { level = 3, totalXP = 100 } },
                 sessions   = { session },
                 levelTicks = { combat = 5, nonCombat = 3, travel = 1, dead = 0, total = 9 },
-                played     = { level = 3, seconds = 60, samples = 58 },
             }
 
             local db, wiped = Ledger.InitCharDB(existing)
@@ -156,7 +154,6 @@ describe("core/xp.lua", function()
             assert.are.equal(100, db.levels[3].totalXP)
             assert.are.same({ session }, db.sessions)
             assert.are.equal(9, db.levelTicks.total)
-            assert.are.equal(60, db.played.seconds)
         end)
 
         it("a missing levelTicks on current-version data is created empty", function()

@@ -109,7 +109,6 @@ function Ledger.BuildExportModel(charDB)
         version                  = charDB.version or 0,
         includeEvents            = includeEvents,
         totalEventCount          = totalEventCount,
-        played                   = charDB.played, -- informational /played reading, nil if none
         levels                   = {},
         sessions                 = {},
     }
@@ -252,13 +251,6 @@ local function JSONSession(s)
     return "{" .. table.concat(parts, ",") .. "}"
 end
 
--- The informational /played reading, or null when there is none yet.
-local function JSONPlayed(played)
-    if not played then return "null" end
-    return string.format('{"level":%s,"seconds":%s,"samples":%s}',
-        Ledger.JSONNumber(played.level), Ledger.JSONNumber(played.seconds), Ledger.JSONNumber(played.samples))
-end
-
 -- Full JSON dump of charDB (shaped like LedgerCharDB). "includeEvents"
 -- tells the reader whether "events" is present on each session or was
 -- dropped for size (see Ledger.EXPORT_MAX_EVENTS); "totalEventCount"
@@ -277,9 +269,8 @@ function Ledger.ExportJSON(charDB)
     end
 
     return string.format(
-        '{"version":%s,"played":%s,"includeEvents":%s,"totalEventCount":%s,"levels":[%s],"sessions":[%s]}',
+        '{"version":%s,"includeEvents":%s,"totalEventCount":%s,"levels":[%s],"sessions":[%s]}',
         Ledger.JSONNumber(model.version),
-        JSONPlayed(model.played),
         tostring(model.includeEvents),
         Ledger.JSONNumber(model.totalEventCount),
         table.concat(levels, ","),

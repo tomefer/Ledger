@@ -10,20 +10,20 @@ describe("core/rate.lua", function()
     end)
 
     describe("ComputeXPRate", function()
-        it("its minimum is a number of SAMPLES, not seconds of wall clock", function()
-            assert.are.equal(60, Ledger.RATE_MIN_SAMPLES)
-            assert.is_nil(Ledger.RATE_MIN_SECONDS)
+        it("its minimum is a number of SECONDS of denominator (60)", function()
+            assert.are.equal(60, Ledger.RATE_MIN_SECONDS)
+            assert.is_nil(Ledger.RATE_MIN_SAMPLES)
         end)
 
-        it("computes xp per hour from xp and activity samples (one sample = one second)", function()
+        it("computes xp per hour from xp and seconds", function()
             assert.are.equal(3600, Ledger.ComputeXPRate(600, 600))
         end)
 
-        it("a zero numerator with enough samples is a real rate of 0, not nil", function()
+        it("a zero numerator with enough seconds is a real rate of 0, not nil", function()
             assert.are.equal(0, Ledger.ComputeXPRate(0, 600))
         end)
 
-        it("returns nil below the minimum sample threshold (too noisy)", function()
+        it("returns nil below the minimum threshold (too noisy)", function()
             assert.is_nil(Ledger.ComputeXPRate(50, 59))
         end)
 
@@ -31,12 +31,12 @@ describe("core/rate.lua", function()
             assert.are.equal(3000, Ledger.ComputeXPRate(50, 60))
         end)
 
-        it("returns nil with nil xp or nil samples", function()
+        it("returns nil with nil xp or nil seconds", function()
             assert.is_nil(Ledger.ComputeXPRate(nil, 600))
             assert.is_nil(Ledger.ComputeXPRate(600, nil))
         end)
 
-        it("returns nil with zero or negative samples", function()
+        it("returns nil with zero or negative seconds", function()
             assert.is_nil(Ledger.ComputeXPRate(600, 0))
             assert.is_nil(Ledger.ComputeXPRate(600, -5))
         end)
@@ -68,88 +68,139 @@ describe("core/rate.lua", function()
         end)
     end)
 
-    describe("ComputeHeadlineRates: session with no data", function()
-        it("a fresh session with no events and enough samples rates at 0, not a dash", function()
-            local session = Ledger.NewSession(0, 10)
-            local rates = Ledger.ComputeHeadlineRates(session, { session }, 600, 600, true)
+    -- Sources of truth: "This session" = xp the addon recorded over
+    -- time() - t0 (source A); "This level" = UnitXP over the level's
+    -- played time (source B). Times below are absolute time().
+    local function Rates(session, unitXP, ref, level, now, includeRested)
+        return Ledger.ComputeHeadlineRates(session, unitXP, ref, level, now, includeRested)
+    end
 
-            assert.are.equal(0, rates.sessionRate)
-            assert.are.equal(0, rates.levelRate)
+    describe("ComputeHeadlineRates: This session (recorded xp over time() - t0)", function()
+        it("is the session's recorded xp over the seconds since t0", function()
+            local session = Ledger.NewSession(1000, 10)
+            Ledger.AddEvent(session, 0, 50, "kill")
+            Ledger.AddEvent(session, 300, 100, "quest")
+
+            -- 150 xp in 1800 s = 300 xp/h
+            assert.are.equal(300, Rates(session, 0, nil, 10, 2800, true).sessionRate)
         end)
 
-        it("an unknown level played time (nil) gives a nil level rate -- a dash, never a divide by a made-up number", function()
-            local session = Ledger.NewSession(0, 10)
+        it("an empty session with enough seconds rates at 0, not a dash", function()
+            local session = Ledger.NewSession(1000, 10)
+
+            assert.are.equal(0, Rates(session, 0, nil, 10, 1600, true).sessionRate)
+        end)
+
+        it("is a dash under 60 seconds, however much xp there is", function()
+            local session = Ledger.NewSession(1000, 10)
             Ledger.AddEvent(session, 0, 500, "kill")
 
-            local rates = Ledger.ComputeHeadlineRates(session, { session }, 600, nil, true)
-
-            assert.is_nil(rates.levelRate)
-            assert.are.equal(3000, rates.sessionRate) -- the session's own rate is unaffected
-            assert.are.equal("-", Ledger.FormatXPRate(rates.levelRate))
+            assert.is_nil(Rates(session, 0, nil, 10, 1059, true).sessionRate)
+            assert.is_near(30000, Rates(session, 0, nil, 10, 1060, true).sessionRate, 1e-6)
         end)
 
-        it("a nil session (no active session at all) yields a session rate of 0, not an error", function()
-            local rates = Ledger.ComputeHeadlineRates(nil, {}, 600, 600, true)
-
-            assert.are.equal(0, rates.sessionRate)
-            assert.are.equal(0, rates.levelRate)
-        end)
-    end)
-
-    describe("ComputeHeadlineRates: session under a minute", function()
-        it("both rates come back nil (dash) when the samples are under the threshold", function()
-            local session = Ledger.NewSession(0, 10)
-            Ledger.AddEvent(session, 0, 50, "kill")
-            local rates = Ledger.ComputeHeadlineRates(session, { session }, 30, 30, true)
-
-            assert.is_nil(rates.sessionRate)
-            assert.is_nil(rates.levelRate)
+        it("is a dash without a session at all", function()
+            assert.is_nil(Rates(nil, 0, nil, 10, 5000, true).sessionRate)
         end)
 
-        it("the session rate can be under threshold while the level rate isn't (different sample counts)", function()
-            local session = Ledger.NewSession(0, 10)
-            Ledger.AddEvent(session, 0, 50, "kill")
-            local rates = Ledger.ComputeHeadlineRates(session, { session }, 30, 3600, true)
-
-            assert.is_nil(rates.sessionRate)
-            assert.are.equal(50, rates.levelRate)
-        end)
-    end)
-
-    describe("ComputeHeadlineRates: both rates", function()
-        it("computes the session rate from just the active session", function()
-            local a = Ledger.NewSession(0, 10)
-            Ledger.AddEvent(a, 0, 100, "kill")
-            local b = Ledger.NewSession(1000, 10)
-            Ledger.AddEvent(b, 0, 50, "quest")
-
-            -- session = b alone (1800 samples); level = a + b (3600 samples).
-            local rates = Ledger.ComputeHeadlineRates(b, { a, b }, 1800, 3600, true)
-
-            assert.are.equal(100, rates.sessionRate) -- 50xp/1800s*3600 = 100
-            assert.are.equal(150, rates.levelRate)   -- (100+50)xp/3600s*3600 = 150
-        end)
-    end)
-
-    describe("ComputeHeadlineRates: includeRested toggle", function()
-        it("counts the rested bonus when includeRested is true", function()
+        it("counts the rested bonus when includeRested is true, not when false", function()
             local session = Ledger.NewSession(0, 10)
             Ledger.AddEvent(session, 0, 172, "kill", 86)
 
-            local rates = Ledger.ComputeHeadlineRates(session, { session }, 3600, 3600, true)
-
-            assert.are.equal(172, rates.sessionRate)
-            assert.are.equal(172, rates.levelRate)
+            assert.are.equal(172, Rates(session, 0, nil, 10, 3600, true).sessionRate)
+            assert.are.equal(86, Rates(session, 0, nil, 10, 3600, false).sessionRate)
         end)
 
-        it("excludes the rested bonus when includeRested is false", function()
+        it("never reads the activity samples", function()
+            local session = Ledger.NewSession(0, 10)
+            Ledger.AddEvent(session, 0, 100, "kill")
+            session.ticks.total = 99999
+
+            assert.are.equal(100, Rates(session, 0, nil, 10, 3600, true).sessionRate)
+        end)
+    end)
+
+    describe("ComputeHeadlineRates: This level (UnitXP over the level's played time)", function()
+        local ref = function() return Ledger.NewLevelPlayedRef(10, 1800, 5000) end
+
+        it("is UnitXP over the reading plus the time elapsed since it arrived", function()
+            -- 500 xp over 1800 + 1800 = 3600 s = 500 xp/h
+            assert.are.equal(500, Rates(nil, 500, ref(), 10, 6800, true).levelRate)
+        end)
+
+        it("does not use the addon's recorded xp at all", function()
+            local session = Ledger.NewSession(0, 10)
+            Ledger.AddEvent(session, 0, 9999, "kill")
+
+            assert.are.equal(500, Rates(session, 500, ref(), 10, 6800, true).levelRate)
+        end)
+
+        it("ignores includeRested: UnitXP already has the rested bonus in it", function()
             local session = Ledger.NewSession(0, 10)
             Ledger.AddEvent(session, 0, 172, "kill", 86)
 
-            local rates = Ledger.ComputeHeadlineRates(session, { session }, 3600, 3600, false)
+            assert.are.equal(500, Rates(session, 500, ref(), 10, 6800, true).levelRate)
+            assert.are.equal(500, Rates(session, 500, ref(), 10, 6800, false).levelRate)
+        end)
 
-            assert.are.equal(86, rates.sessionRate)
-            assert.are.equal(86, rates.levelRate)
+        it("is a dash until the first TIME_PLAYED_MSG reply has arrived", function()
+            assert.is_nil(Rates(nil, 500, nil, 10, 6800, true).levelRate)
+        end)
+
+        it("is a dash while the denominator is under 60 seconds", function()
+            local fresh = Ledger.NewLevelPlayedRef(10, 20, 5000)
+
+            assert.is_nil(Rates(nil, 500, fresh, 10, 5039, true).levelRate) -- 59 s
+            assert.is_near(30000, Rates(nil, 500, fresh, 10, 5040, true).levelRate, 1e-6) -- 60 s
+        end)
+
+        it("right after a ding is a dash, never millions of xp/h: leftover xp over a tiny denominator", function()
+            -- Level 11 just started: UnitXP is the leftover 340 xp and the
+            -- new level's reply says 3 s played.
+            local afterDing = Ledger.NewLevelPlayedRef(11, 3, 9000)
+
+            assert.is_nil(Rates(nil, 340, afterDing, 11, 9002, true).levelRate)
+        end)
+
+        it("between the ding and the new reply the old level's reading is not used", function()
+            -- ref is level 10's (1800 s played), the player is already 11.
+            assert.is_nil(Rates(nil, 340, ref(), 11, 9002, true).levelRate)
+        end)
+
+        it("a new reply replaces the previous reading, nothing is carried over", function()
+            local first  = Ledger.NewLevelPlayedRef(10, 1800, 5000)
+            local second = Ledger.NewLevelPlayedRef(10, 3600, 6000)
+
+            assert.are.equal(1800 + 100, Rates(nil, 0, first,  10, 5100, true).levelPlayed)
+            assert.are.equal(3600 + 100, Rates(nil, 0, second, 10, 6100, true).levelPlayed)
+        end)
+
+        it("a nil UnitXP is a dash", function()
+            assert.is_nil(Rates(nil, nil, ref(), 10, 6800, true).levelRate)
+        end)
+
+        it("never reads the activity samples", function()
+            local session = Ledger.NewSession(0, 10)
+            session.ticks.total = 99999
+
+            assert.are.equal(500, Rates(session, 500, ref(), 10, 6800, true).levelRate)
+        end)
+    end)
+
+    describe("ComputeHeadlineRates: the denominators it returns", function()
+        it("returns both played times next to the rates", function()
+            local session = Ledger.NewSession(1000, 10)
+            local rates = Rates(session, 0, Ledger.NewLevelPlayedRef(10, 2472, 5000), 10, 5090, true)
+
+            assert.are.equal(4090, rates.sessionPlayed)
+            assert.are.equal(2472 + 90, rates.levelPlayed)
+        end)
+
+        it("returns nil times when there is nothing to measure", function()
+            local rates = Rates(nil, 0, nil, 10, 5090, true)
+
+            assert.is_nil(rates.sessionPlayed)
+            assert.is_nil(rates.levelPlayed)
         end)
     end)
 
@@ -170,6 +221,13 @@ describe("core/rate.lua", function()
             assert.are.equal("This level", levelRow.label)
             assert.are.equal("500 xp/h", levelRow.value)
             assert.are.same(Ledger.RATE_DEFAULT_COLOR, levelRow.color)
+        end)
+
+        it("tells under the rates that This level includes the rested xp", function()
+            local section = Ledger.BuildRatePanelSections({})[1]
+
+            assert.are.same({ Ledger.RATE_LEVEL_NOTE }, section.notes)
+            assert.is_truthy(Ledger.RATE_LEVEL_NOTE:find("rested", 1, true))
         end)
 
         it("shows dashes for nil rates instead of erroring", function()
@@ -229,20 +287,6 @@ describe("core/rate.lua", function()
                 assert.are.equal("-", section.rows[1].value)
                 assert.are.equal("-", section.rows[2].value)
             end)
-        end)
-    end)
-
-    describe("ComputeHeadlineRates: only rates", function()
-        it("returns just the two rates, no sample counts nor times", function()
-            local session = Ledger.NewSession(0, 5, nil, false)
-            local rates = Ledger.ComputeHeadlineRates(session, { session }, 30, 3600, true)
-
-            assert.is_nil(rates.sessionRate)
-            assert.are.equal(0, rates.levelRate)
-            assert.is_nil(rates.sessionSamples)
-            assert.is_nil(rates.levelSamples)
-            assert.is_nil(rates.sessionPlayed)
-            assert.is_nil(rates.levelPlayed)
         end)
     end)
 

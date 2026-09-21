@@ -238,40 +238,4 @@ describe("core/ticks.lua", function()
             assert.are.equal("no samples yet", Ledger.FormatTickSummary(nil))
         end)
     end)
-
-    describe("RecordPlayedReading: informational, in its own field", function()
-        it("stores the level, the seconds and the level's sample total at that moment", function()
-            local charDB = { levelTicks = { combat = 10, nonCombat = 20, travel = 5, dead = 0, total = 35 } }
-
-            Ledger.RecordPlayedReading(charDB, 12, 2472)
-
-            assert.are.same({ level = 12, seconds = 2472, samples = 35 }, charDB.played)
-        end)
-
-        it("takes part in nothing: the counters are left exactly as they were", function()
-            local charDB = { levelTicks = { combat = 10, nonCombat = 20, travel = 5, dead = 0, total = 35 } }
-            local before = Snapshot(charDB.levelTicks)
-
-            Ledger.RecordPlayedReading(charDB, 12, 9999)
-
-            assert.are.same(before, Snapshot(charDB.levelTicks))
-        end)
-
-        it("a later reading replaces the earlier one", function()
-            local charDB = { levelTicks = Ledger.NewTicks() }
-
-            Ledger.RecordPlayedReading(charDB, 12, 100)
-            Ledger.RecordPlayedReading(charDB, 12, 200)
-
-            assert.are.equal(200, charDB.played.seconds)
-        end)
-
-        it("copes with no levelTicks yet (0 samples)", function()
-            local charDB = {}
-
-            Ledger.RecordPlayedReading(charDB, 3, 50)
-
-            assert.are.equal(0, charDB.played.samples)
-        end)
-    end)
 end)

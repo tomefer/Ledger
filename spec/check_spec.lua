@@ -277,7 +277,6 @@ describe("core/check.lua", function()
                 sessions = { session },
                 levels = {},
                 levelTicks = opts.levelTicks or { combat = 20, nonCombat = 60, travel = 15, dead = 5, total = 100 },
-                played = opts.played,
             }
         end
 
@@ -296,38 +295,10 @@ describe("core/check.lua", function()
             assert.is_not_nil(Find(result, "Level activity, % of samples: no samples yet", "info"))
         end)
 
-        it("shows the /played reading next to the samples at that moment, with their difference", function()
-            local result = Ledger.BuildCheck(
-                CharDB({ played = { level = 12, seconds = 2472, samples = 2450 } }), { level = 12, xp = 100 })
-
-            assert.is_not_nil(Find(result, "/played, this level: 2472s played vs 2450 samples at that moment, difference +22", "info"))
-            assert.is_not_nil(Find(result, "information, not an error"))
-        end)
-
-        it("a difference in either direction is only ever information, never a discrepancy", function()
-            for _, played in ipairs({
-                { level = 12, seconds = 100,   samples = 5000 },
-                { level = 12, seconds = 90000, samples = 10 },
-            }) do
-                local result = Ledger.BuildCheck(CharDB({ played = played }), { level = 12, xp = 100 })
-
-                assert.are.equal(0, result.discrepancies)
-                assert.are.equal("Ledger check: ALL OK", result.lines[1].text)
-                assert.are.equal(0, CountStatus(result, "bad"))
-            end
-        end)
-
-        it("says so when there is no /played reading yet", function()
+        it("says nothing about /played: it is another source and is never persisted", function()
             local result = Ledger.BuildCheck(CharDB(), { level = 12, xp = 100 })
 
-            assert.is_not_nil(Find(result, "/played: no reading yet", "info"))
-        end)
-
-        it("says so when the reading is from another level", function()
-            local result = Ledger.BuildCheck(
-                CharDB({ played = { level = 11, seconds = 500, samples = 480 } }), { level = 12, xp = 100 })
-
-            assert.is_not_nil(Find(result, "/played: last reading is from level 11, the player is now level 12", "info"))
+            assert.is_nil(Find(result, "/played"))
             assert.are.equal(0, result.discrepancies)
         end)
 

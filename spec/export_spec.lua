@@ -177,18 +177,12 @@ describe("core/export.lua", function()
         end)
     end)
 
-    describe("the /played reading is exported as information, or null", function()
-        it("JSON: null when there is no reading yet", function()
-            local decoded = dkjson.decode(Ledger.ExportJSON({ sessions = {}, levels = {} }))
-
-            assert.is_nil(decoded.played)
-        end)
-
-        it("JSON: the reading with the samples it was taken against", function()
+    describe("nothing from /played is exported (it is never persisted)", function()
+        it("JSON has no played key, even if a stale one is in the data", function()
             local decoded = dkjson.decode(Ledger.ExportJSON({
                 sessions = {}, levels = {}, played = { level = 12, seconds = 2472, samples = 2450 } }))
 
-            assert.are.same({ level = 12, seconds = 2472, samples = 2450 }, decoded.played)
+            assert.is_nil(decoded.played)
         end)
     end)
 

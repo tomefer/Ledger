@@ -7,19 +7,24 @@
 
 local ADDON_NAME, Ledger = ...
 
--- RequestTimePlayed only feeds DISPLAY-ONLY readings (the /played line
--- in /ldg check and the level's played time in the rate panel: nothing
--- is calculated from either), and its presence across client builds is
--- exactly the kind of thing /ldg probe exists to check -- so it's never
--- called bare: a build where it's missing or errors just skips the
--- reading instead of breaking the handler that called this. Exposed so
--- /ldg check can ask for a fresh reading when its window opens.
+-- RequestTimePlayed only feeds the denominator of the rate panel's
+-- "This level" xp/hour (Ledger.levelPlayedRef), and it is asked for at
+-- exactly two moments, never periodically nor from anywhere else:
+-- PLAYER_ENTERING_WORLD and PLAYER_LEVEL_UP (the server's level counter
+-- restarts on a ding). A /played typed by the player also lands in the
+-- TIME_PLAYED_MSG handler and is used as well. Its presence across
+-- client builds is exactly the kind of thing /ldg probe exists to check
+-- -- so it's never called bare: a build where it's missing or errors
+-- just skips the reading instead of breaking the handler that called
+-- this; the error is logged.
 local function SafeRequestTimePlayed()
     if type(RequestTimePlayed) == "function" then
-        pcall(RequestTimePlayed)
+        local ok, err = pcall(RequestTimePlayed)
+        if not ok then
+            Ledger.Log("error", "RequestTimePlayed failed: " .. tostring(err))
+        end
     end
 end
-Ledger.RequestPlayedReading = SafeRequestTimePlayed
 
 ----------------------------------------------------------------------
 -- Combat xp patterns, built at load time from ALL of the client's real
@@ -353,7 +358,6 @@ function Ledger.WipeCharacterData(t)
     previousXP    = UnitXP("player")
     previousMaxXP = UnitXPMax("player")
     previousLevel = UnitLevel("player")
-    SafeRequestTimePlayed()
     Ledger.RedrawXPBarFull()
 end
 
@@ -590,8 +594,10 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
             t, tostring(arg1), tostring(UnitLevel("player")), tostring(previousLevel)))
         Ledger.UpdateXP()
         -- The server's per-level played counter restarts on a ding: ask
-        -- again so the rate panel's level time follows (until the reply
-        -- lands it shows a dash, see Ledger.LevelPlayedSeconds).
+        -- again and wait for the real reply. Nothing is reset or made up
+        -- here (the old reading belongs to the old level, so until the
+        -- reply lands "This level" shows a dash, see
+        -- Ledger.LevelPlayedSeconds).
         SafeRequestTimePlayed()
 
     elseif event == "PLAYER_DEAD" then
@@ -606,18 +612,19 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
 
     elseif event == "TIME_PLAYED_MSG" then
         -- arg1 = the CHARACTER's total played time, arg2 = time played
-        -- on the current level. DISPLAY ONLY, takes part in no
-        -- calculation and no metric. arg2 goes to two places:
-        -- - LedgerCharDB.played (persisted, together with how many
-        --   samples the level had at that moment): only /ldg check reads it.
-        -- - Ledger.levelPlayedRef (IN MEMORY, never persisted, with the
-        --   time() of this reception): the rate panel shows it plus the
-        --   time elapsed since. Each reply REPLACES the ref, never adds
-        --   to it (Ledger.NewLevelPlayedRef).
-        Ledger.RecordPlayedReading(LedgerCharDB, UnitLevel("player"), arg2)
-        Ledger.levelPlayedRef = Ledger.NewLevelPlayedRef(UnitLevel("player"), arg2, time()) or Ledger.levelPlayedRef
-        if Ledger.checkFrame and Ledger.checkFrame:IsShown() then
-            Ledger.RenderCheckFrame()
+        -- on the current level. Whoever asked for it (this addon or the
+        -- player's /played) the reply is used the same way: it REPLACES
+        -- Ledger.levelPlayedRef, which holds the level's played time and
+        -- the time() of this reception TOGETHER (one table built in one
+        -- go, never one field without the other, never added to the
+        -- previous one). In memory only: never persisted, never in
+        -- levels or sessions, and feeding nothing but "This level" in the
+        -- rate panel (Ledger.ComputeHeadlineRates).
+        local ref = Ledger.NewLevelPlayedRef(UnitLevel("player"), arg2, time())
+        if ref then
+            Ledger.levelPlayedRef = ref
+        else
+            Ledger.Log("error", "TIME_PLAYED_MSG without a numeric level time: " .. tostring(arg2))
         end
     end
 end)

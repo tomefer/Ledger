@@ -155,7 +155,7 @@ local function RenderHoverPanel(sections)
 end
 
 ----------------------------------------------------------------------
--- Refresh: recomputes both rates from LedgerCharDB and redraws the
+-- Refresh: recomputes both rates (see below for their sources) and redraws the
 -- headline number, called from the 1s ticker below. Also re-renders
 -- the hover panel if it's currently shown, so it doesn't go stale
 -- while the player is hovering. lastRates is reused by OnEnter instead
@@ -163,32 +163,19 @@ end
 -- a second.
 ----------------------------------------------------------------------
 
-local lastRates = { sessionRate = nil, levelRate = nil }
-
-local function CurrentSessionAndLevelSessions()
-    local sessions = LedgerCharDB.sessions
-    return sessions[#sessions], sessions
-end
+local lastRates = {}
 
 function Ledger.RefreshRateFrame()
     if not frame:IsShown() then return end
 
-    local session, levelSessions = CurrentSessionAndLevelSessions()
-    -- The rate denominators are activity SAMPLES (core/ticks.lua), one
-    -- per second the sampler ran: never the wall clock nor /played.
-    local sessionSamples = session and session.ticks and session.ticks.total or 0
-    local levelSamples = LedgerCharDB.levelTicks.total
-
-    lastRates = Ledger.ComputeHeadlineRates(session, levelSessions, sessionSamples, levelSamples, LedgerDB.includeRested)
-
-    -- Played time, display only (feeds no rate nor metric, nothing is
-    -- persisted): the session's is time() - t0; the level's is the last
-    -- /played reading (Ledger.levelPlayedRef, in memory, set by the
-    -- TIME_PLAYED_MSG handler in ui/xp_capture.lua) plus the time since
-    -- it arrived -- nil (a dash) until the first reply.
-    local now = time()
-    lastRates.sessionPlayed = Ledger.SessionPlayedSeconds(session, now)
-    lastRates.levelPlayed   = Ledger.LevelPlayedSeconds(Ledger.levelPlayedRef, UnitLevel("player"), now)
+    -- Sources of truth (CLAUDE.md): "This session" is the addon's own
+    -- record over time() - t0; "This level" is the game's UnitXP over the
+    -- level's played time (Ledger.levelPlayedRef, in memory, set by the
+    -- TIME_PLAYED_MSG handler in ui/xp_capture.lua). The activity samples
+    -- feed the time bar only.
+    local sessions = LedgerCharDB.sessions
+    lastRates = Ledger.ComputeHeadlineRates(sessions[#sessions], UnitXP("player"),
+        Ledger.levelPlayedRef, UnitLevel("player"), time(), LedgerDB.includeRested)
 
     text:SetText(Ledger.FormatXPRate(lastRates.sessionRate))
     ResizeToText()

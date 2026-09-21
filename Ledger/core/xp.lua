@@ -8,7 +8,7 @@ local ADDON_NAME, Ledger = ...
 -- found on disk for a character's data differs from this one, that data
 -- is wiped and tracking starts clean (see Ledger.InitCharDB). Bump this
 -- whenever the shape of LedgerCharDB changes.
-Ledger.DB_VERSION = 9
+Ledger.DB_VERSION = 10
 
 Ledger.DEFAULTS = {
     pos             = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 0 },
@@ -91,8 +91,8 @@ end
 --   levelTicks -- the level in progress's activity counters
 --                 (core/ticks.lua), incremented live by the sampler; on
 --                 close they become that level's entry.ticks
---   played     -- optional: the last /played reading, INFORMATIONAL only
---                 (Ledger.RecordPlayedReading), absent until one arrives
+-- Nothing from TIME_PLAYED_MSG is persisted here nor anywhere else: the
+-- level's played time lives in memory only (Ledger.levelPlayedRef).
 Ledger.CHAR_DEFAULTS = {
     levels   = {},
     sessions = {},

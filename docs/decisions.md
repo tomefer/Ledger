@@ -152,26 +152,26 @@ Decisions that came with it:
   it used to show the sampled duration, replaced 2026-09-21). Percentages are
   derived at display time, never persisted. Data dumps (`/ldg export`) do write
   the raw counters: they are the data, not a presentation.
-- **xp/hour denominator = samples** (1 sample = 1 s), never wall-clock or
-  `/played`. Time the client was stopped is not in the denominator, by design.
-- **`/played` demoted to information.** `TIME_PLAYED_MSG` (`arg2` = played time
-  in the current level) is stored in `LedgerCharDB.played = { level, seconds,
-  samples }` (`Ledger.RecordPlayedReading`) next to the level's sample count at
-  that instant, so they can be compared without the delay between request and
-  reply skewing them. Requested (always under `pcall`, `Ledger.RequestPlayedReading`)
-  on `PLAYER_ENTERING_WORLD`, on `PLAYER_LEVEL_UP` (the server-side level counter
-  resets; this request only feeds the rate panel's clock), after `/ldg wipe
-  confirm`, and when `/ldg check` opens or refreshes; not requested from the
-  level close itself (it would give ~0). The only reader of
-  `LedgerCharDB.played` is `/ldg check`. Each reply also prints Blizzard's
-  "time played" line to chat, as always.
-- **In-memory played reference** (`Ledger.levelPlayedRef = { level, seconds,
-  receivedAt }`, `Ledger.NewLevelPlayedRef`, `core/rate.lua`): set in the
-  `TIME_PLAYED_MSG` handler with the `time()` of reception, never persisted,
-  never inside `levels` or `sessions`. Read only by the `/ldg rate` panel for the
-  level's played time. Each reply **replaces** it (after a `/reload` the new
-  value already includes the old one); display only, feeds no xp/hour or other
-  metric.
+- **The samples feed the time bar only (2026-09-21).** xp/hour used to be
+  xp / samples x 3600, and `/played` was "informational" (`LedgerCharDB.played`
+  with the level's sample count, read by `/ldg check`). Both are gone: each
+  metric has ONE source (A addon record, B game API, C tick sampling), fixed in
+  the "Sources of truth" section of `CLAUDE.md` and applied in 6.5. Time not
+  observed by the client is now inside the session's denominator (`time() - t0`).
+- **`TIME_PLAYED_MSG` (`arg2` = played time in the current level)** goes into
+  `Ledger.levelPlayedRef = { level, seconds, receivedAt }`
+  (`Ledger.NewLevelPlayedRef`, `core/rate.lua`), built in one go with the
+  `time()` of reception, in memory only, never inside `levels` or `sessions`,
+  never in `LedgerCharDB` (v10 dropped the old `played` field). Each reply
+  **replaces** it (after a `/reload` the new value already includes the old
+  one), whoever asked for it. It is the denominator of "This level" and nothing
+  else. `RequestTimePlayed` (always under `pcall`, failures logged) is called at
+  exactly two moments: `PLAYER_ENTERING_WORLD` and `PLAYER_LEVEL_UP` (the
+  server-side level counter resets; nothing is zeroed locally: the old reading
+  just stops matching `UnitLevel` and the rate is a dash until the reply). It
+  used to be also requested after `/ldg wipe confirm` and when `/ldg check`
+  opened; both removed (neither changes the server's played time). Each reply
+  also prints Blizzard's "time played" line to chat, as always.
 - Per-session and per-level counters share the shape
   `{ combat, nonCombat, travel, dead, total }` (`Ledger.NewTicks()`). At level
   close the level counters pass by reference to `entry.ticks`; a `/ldg reset`
@@ -362,12 +362,13 @@ mechanism, not a regression.
 
 ## 5. Persistence
 
-- **No migrations (`Ledger.DB_VERSION`, now 9).** On version mismatch (older,
+- **No migrations (`Ledger.DB_VERSION`, now 10).** On version mismatch (older,
   newer or missing on non-empty data) `Ledger.InitCharDB` discards everything
   and starts clean, returns `db, wiped, oldVersion`, and `ui/events.lua` says
   so in chat at login (never silent). A nil/empty table (first load) is not a
   wipe. v9 = the activity-counter model; all earlier versions and their v1→v8
-  migrations were deleted. Reason: the schema changed too often for migrations
+  migrations were deleted. v10 = the persisted `played` reading is gone (nothing
+  from `TIME_PLAYED_MSG` is stored). Reason: the schema changed too often for migrations
   to be worth carrying.
 - `LedgerDB` (account) is never wiped by a version change: UI settings don't
   depend on the data schema; `Ledger.InitDB` only fills gaps and stamps the
@@ -623,8 +624,9 @@ highest changes: `Ledger.RestoreRatePosition()` (reads
 `Ledger.timeBarFrame:IsShown()`) is called on `PLAYER_LOGIN` after the activity
 bar's visibility is set, and in `ToggleTimeBar`. If the player dragged it
 (`LedgerDB.ratePos`), that absolute position wins.
-- **The number:** xp/hour of the **active session**
-  (`Ledger.TotalXP(session, includeRested) / session.ticks.total * 3600`,
+- **The number:** xp/hour of the **active session**, source A: xp recorded in
+  the session over `time() - session.t0`
+  (`Ledger.TotalXP(session, includeRested) / (time() - t0) * 3600`,
   `Ledger.ComputeXPRate`), never of the level (that is the hover panel's data).
   `GameFontNormalHuge`, white, on a semi-transparent black background
   (`SetBackdropColor(0,0,0,0.6)`) that fits the text with padding
@@ -633,13 +635,25 @@ bar's visibility is set, and in `ToggleTimeBar`. If the player dragged it
   thousands separator by hand (classic Lua idiom: insert a comma before each
   group of 3 digits repeatedly until `gsub` finds no more) and suffix
   `" xp/h"`. `nil` formats as `"-"`, never `"0 xp/h"` or an invented number.
-- **Dash under 60 samples** (`Ledger.RATE_MIN_SAMPLES = 60`): below that the
-  denominator is so small the rate explodes (50 xp in 5 samples = 36000 xp/h);
-  `ComputeXPRate` returns `nil`. A zero numerator with plenty of samples is
+- **Dash under 60 seconds** (`Ledger.RATE_MIN_SECONDS = 60`): below that the
+  denominator is so small the rate explodes (50 xp in 5 s = 36000 xp/h);
+  `ComputeXPRate` returns `nil`. A zero numerator with plenty of seconds is
   still a real rate of `0` (not a dash): the dash is only for a small
-  denominator, never for small or zero xp.
-- **Respects `includeRested`:** `Ledger.ComputeHeadlineRates` takes the toggle
-  and forwards it to `TotalXP`/`TotalXPAcrossSessions` for both rates.
+  denominator, never for small or zero xp. Right after a ding this matters most
+  for "This level": the numerator is the ding's leftover xp and the denominator
+  a few seconds. Any "time to next level" estimate would need the same
+  threshold (there is none today).
+- **Sources (2026-09-21, replaces the sample-based rates):** "This session" is
+  source A (recorded xp / `time() - t0`, respects `includeRested`); "This
+  level" is source B (`UnitXP("player")` / `ref.seconds + (time() -
+  ref.receivedAt)`, `ref` = `Ledger.levelPlayedRef`, see 2.1) and **ignores
+  `includeRested`** because `UnitXP` already includes the rested bonus and it
+  can't be split; the hover panel says so in a note under the xp/hour rows
+  (`Ledger.RATE_LEVEL_NOTE`). The samples are not read by this file.
+- **Respects `includeRested`** (session only): `Ledger.ComputeHeadlineRates(session,
+  unitXP, ref, currentLevel, now, includeRested)` forwards the toggle to
+  `TotalXP` for the session rate. It receives `unitXP`/`now`/`currentLevel` as
+  parameters (`core/` reads no API); `ui/rate_frame.lua` supplies them.
 - **Refresh:** its own `C_Timer.NewTicker(1, Ledger.RefreshRateFrame)`,
   independent of the two in `ui/xp_capture.lua` (the addon already had more than
   one 1 s ticker, each with its own responsibility). `RefreshRateFrame` does
@@ -654,18 +668,18 @@ bar's visibility is set, and in `ToggleTimeBar`. If the player dragged it
 **Hover panel** (`LedgerRateHoverPanel`, own frame, **never `GameTooltip`**,
 unlike the bars): built from a generic section structure in `core/rate.lua`.
 - `Ledger.BuildRatePanelSections(rates)` (pure, `rates = { sessionRate,
-  levelRate, sessionPlayed, levelPlayed }`: the two rates come from
-  `ComputeHeadlineRates`, the two times, in seconds or `nil`, are added by
-  `ui/rate_frame.lua` on each refresh) returns `{ { title, rows = { {label,
+  levelRate, sessionPlayed, levelPlayed }`, exactly what
+  `ComputeHeadlineRates` returns: the rates and the two denominators, in seconds
+  or `nil`) returns `{ { title, rows = { {label,
   value, color}, ... }, notes = { "line", ... } }, ... }` (`notes` optional, in
   `Ledger.RATE_NOTE_COLOR`): `"XP/hour"` with `"This session"` (same number as
   the main frame, white, `RATE_HIGHLIGHT_COLOR`) and `"This level"` (light grey,
   `RATE_DEFAULT_COLOR`); and `"Played time"` (always present) with `"This
   session"`/`"This level"` as a duration (`Ledger.FormatDuration`: `45s`,
   `12m 05s`, `1h 23m`, seconds dropped from the hour up; `nil` → `-`). These are
-  **exact clocks, display only**: not persisted, not in `levels`/`sessions`,
-  feeding no xp/hour or other metric (samples stay the only source of the
-  activity split and of the rate's denominator). Adding recent-level history or a
+  the very denominators of the two rows above, shown: exact clocks, not
+  persisted, not in `levels`/`sessions`. Under the xp/hour rows a note says
+  "This level" includes rested xp. Adding recent-level history or a
   per-source breakdown later is one more entry in that list; `RenderHoverPanel`
   walks sections and rows generically.
   - **History:** the section was `"Sampled time"` (1 sample = 1 s, with a note
@@ -773,9 +787,9 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   (`Ledger.nativeFillInfo`); `C_ChatInfo` presence (unused so far, a reference
   for future chat-channel filtering); `xpBarAnchor` (`Ledger.xpBarAnchorInfo`,
   `"not resolved yet"` if the bar was never redrawn this session).
-  `RequestTimePlayed` is never called bare: `SafeRequestTimePlayed()` (exposed
-  as `Ledger.RequestPlayedReading`) checks it's a function and wraps it in
-  `pcall`; if missing, `LedgerCharDB.played` just isn't refreshed.
+  `RequestTimePlayed` is never called bare: `SafeRequestTimePlayed()` (local to
+  `ui/xp_capture.lua`) checks it's a function and wraps it in
+  `pcall`; if missing, `Ledger.levelPlayedRef` never gets set and "This level" xp/hour stays a dash.
   `UnitXP`/`UnitXPMax` stay unwrapped on purpose: they are the addon's core and
   no degraded mode makes sense; if a client lacks them the addon can't track xp
   there, which is exactly what `/ldg probe` should show, not hide.
@@ -931,7 +945,9 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   Decide it together with the rate panel's "This session" clock (`time() - t0`,
   6.5), which counts the offline time after a relog on a client that resumes
   saved sessions: accept it, open a new session after a long gap, or measure the
-  session clock from the addon load.
+  session clock from the addon load. Since 2026-09-21 that clock is also the
+  denominator of "This session" xp/hour (source A, `CLAUDE.md` "Sources of
+  truth"), so after such a relog that rate is diluted by the offline gap too.
 - Nothing reads `Ledger.ReconciliationGap(reconciler)` to warn live if it
   fires; today only the in-memory counter exists (`ui/xp_capture.lua`). Undecided
   where to show it: an automatic warning if the gap doesn't close after a while,

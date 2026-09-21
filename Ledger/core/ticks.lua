@@ -13,7 +13,8 @@
 -- session, never as an absolute value: an absolute number invites
 -- reconciling it with something external (played time, the wall clock)
 -- that it was never meant to match. A percentage is derived at display
--- time (Ledger.TickPercent) and never persisted.
+-- time (Ledger.TickPercent) and never persisted. The samples feed the
+-- time bar (and its tooltip) and nothing else: no rate, no duration.
 --
 -- Pure logic: does not use any WoW API. The player's state is received
 -- as a parameter.
@@ -120,24 +121,4 @@ function Ledger.FormatTickSummary(ticks)
         parts[#parts + 1] = string.format("%s %.1f%%", LABELS[key], Ledger.TickPercent(ticks, key))
     end
     return table.concat(parts, " | ")
-end
-
-----------------------------------------------------------------------
--- /played reading: INFORMATIONAL ONLY. TIME_PLAYED_MSG's time on the
--- current level is kept in its own field and takes part in no
--- calculation and no metric -- the only reader is /ldg check, which
--- shows it next to the sample total as information.
-----------------------------------------------------------------------
-
--- Stores the reading (charDB.played) together with how many samples the
--- level in progress had at that moment, so the two are comparable: a
--- reading is only ever a snapshot of the instant the reply arrived.
---   level   -- UnitLevel("player") when the reply arrived
---   seconds -- TIME_PLAYED_MSG's arg2, time played on the current level
-function Ledger.RecordPlayedReading(charDB, level, seconds)
-    charDB.played = {
-        level   = level,
-        seconds = seconds,
-        samples = (charDB.levelTicks and charDB.levelTicks.total) or 0,
-    }
 end

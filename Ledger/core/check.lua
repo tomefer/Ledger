@@ -5,7 +5,7 @@
 -- level/xp, gathered by ui/check_frame.lua) -- same split as
 -- core/state_dump.lua. Time is NOT reconciled: there are no time
 -- invariants, the activity counters are what they are (core/ticks.lua);
--- the last /played reading is only shown as information.
+-- the activity mix is only shown as information (percentages).
 --
 -- Two steps, both pure: Ledger.BuildCheck computes the findings as a
 -- list of { status=, text= } lines (the status is what makes a line a
@@ -204,11 +204,8 @@ function Ledger.BuildCheck(charDB, player)
 
     ------------------------------------------------------------------
     -- Time: INFORMATION ONLY, never a discrepancy. The activity mix is
-    -- shown as percentages of the samples (never absolute time), and the
-    -- last /played reading is shown next to the sample total it was
-    -- taken against, with their difference -- a difference between the
-    -- two is expected (the sampler only ticks while the client runs) and
-    -- is presented as information, not as an error.
+    -- shown as percentages of the samples (never absolute time, and never
+    -- set against the game's played time: they are different sources).
     ------------------------------------------------------------------
     add("section", "Time (information only)")
 
@@ -217,20 +214,6 @@ function Ledger.BuildCheck(charDB, player)
     local activeSession = sessions[#sessions]
     if activeSession then
         add("info", "Session activity, % of samples: " .. Ledger.FormatTickSummary(activeSession.ticks))
-    end
-
-    local played = charDB.played
-    if not played then
-        add("info", "/played: no reading yet (it is requested on login and when this window opens)")
-    elseif played.level ~= player.level then
-        add("info", string.format(
-            "/played: last reading is from level %s, the player is now level %d -- refresh to read again",
-            tostring(played.level), player.level))
-    else
-        add("info", string.format(
-            "/played, this level: %ds played vs %d samples at that moment, difference %+d",
-            played.seconds, played.samples, played.seconds - played.samples))
-        add("info", "  (information, not an error: samples only run while the client does)")
     end
 
     add("section", "Notes")
