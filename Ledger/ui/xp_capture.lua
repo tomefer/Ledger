@@ -77,6 +77,35 @@ for _, name in ipairs({ "ERR_ZONE_EXPLORED_XP" }) do
 end
 Ledger.exploreStrings = exploreStrings
 
+-- Chat event payloads can arrive as "secret" strings (confirmed
+-- 2026-09-21 on the WoW Forever beta, build 1.60.1, looting a boss:
+-- "attempt to index local 'msg' (a secret string value, while execution
+-- tainted by 'Ledger')" from CHAT_MSG_SYSTEM). A secret string can be
+-- passed around but not indexed, matched, formatted or compared by
+-- tainted code, so nothing in this file may touch such a message
+-- beyond this check. Uses issecretvalue when the client has it, plus a
+-- pcall probe that needs no assumption about which API exists (an
+-- error from a plain string function on it means "unreadable" too).
+local function IsReadableMessage(msg)
+    if type(msg) ~= "string" then return false end
+    if type(issecretvalue) == "function" then
+        local ok, secret = pcall(issecretvalue, msg)
+        if ok and secret then return false end
+    end
+    return (pcall(string.find, msg, "^"))
+end
+
+-- Once per event per session, the first time an unreadable message is
+-- seen, so the loss is visible without flooding the log on every kill.
+local warnedSecretMessage = {}
+local function WarnSecretMessage(event)
+    if warnedSecretMessage[event] then return end
+    warnedSecretMessage[event] = true
+    Ledger.Log("error", string.format(
+        "%s payload is a secret value this client won't let us read -- its text can't be used, " ..
+        "so what it would have told us is lost or guessed for such messages (see CLAUDE.md).", event))
+end
+
 -- Classifies the message (core/chat_patterns.lua: Ledger.ClassifyXPGainMatch,
 -- pure logic) and logs every variant tried at TRACE level (matched or
 -- not, and what it captured if it matched), plus the resulting final
@@ -475,8 +504,21 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         previousXP, previousMaxXP, previousLevel = currentXP, currentMax, currentLevel
 
     elseif event == "CHAT_MSG_COMBAT_XP_GAIN" then
-        Ledger.Log("trace", string.format("CHAT_MSG_COMBAT_XP_GAIN t=%.3f msg=<<%s>>", t, tostring(arg1)))
-        local category, rested, capturedAmount = HandleCombatXPGainMessage(arg1, t)
+        local category, rested, capturedAmount
+        if IsReadableMessage(arg1) then
+            Ledger.Log("trace", string.format("CHAT_MSG_COMBAT_XP_GAIN t=%.3f msg=<<%s>>", t, arg1))
+            category, rested, capturedAmount = HandleCombatXPGainMessage(arg1, t)
+        else
+            -- Can't read the text, so no variant can be matched and no
+            -- rested suffix found. This event only fires for combat xp
+            -- (exploration comes through CHAT_MSG_SYSTEM, quests pair by
+            -- exact amount with priority), so "kill" is the best guess;
+            -- rested is 0 (unknown, counted as no bonus).
+            WarnSecretMessage("CHAT_MSG_COMBAT_XP_GAIN")
+            category, rested = "kill", 0
+            Ledger.Log("trace", string.format(
+                "CHAT_MSG_COMBAT_XP_GAIN t=%.3f msg=<secret> unreadable -- assumed category kill, rested 0", t))
+        end
 
         -- A generic "You gain N experience." is identical to a quest
         -- turn-in's own message (core/chat_patterns.lua can't tell them
@@ -499,9 +541,15 @@ ev:SetScript("OnEvent", function(self, event, arg1, arg2, arg3)
         -- UnitXP delta by exact value like a quest does and EmitEvent
         -- cross-checks the two. Everything else that comes through here
         -- is only TRACE-logged, to confirm the event carries what we
-        -- assume.
-        local exploreXP = Ledger.ExtractExploreXP(exploreStrings, arg1)
-        if exploreXP then
+        -- assume. A secret message (seen looting a boss) can't be read at
+        -- all: it's skipped, and an exploration xp that came that way
+        -- would just be released as "unknown" by the matcher.
+        local readable = IsReadableMessage(arg1)
+        local exploreXP = readable and Ledger.ExtractExploreXP(exploreStrings, arg1) or nil
+        if not readable then
+            WarnSecretMessage("CHAT_MSG_SYSTEM")
+            Ledger.Log("trace", string.format("CHAT_MSG_SYSTEM t=%.3f ignored msg=<secret>", t))
+        elseif exploreXP then
             Ledger.Log("trace", string.format(
                 "CHAT_MSG_SYSTEM t=%.3f area discovery xp=%d msg=<<%s>>", t, exploreXP, tostring(arg1)))
             local paired = Ledger.AddSource(matcher, t, "explore", Ledger.Log, 0, exploreXP)

@@ -615,6 +615,28 @@ nunca por orden de inserción: si el addon se instala a mitad de partida
   ambos clientes — cada mensaje de sistema se loguea a TRACE
   (`CHAT_MSG_SYSTEM ... area discovery` / `... ignored`) y `/ldg strings`
   imprime el global string.
+- **Mensajes de chat "secret" (2026-09-21, beta de WoW Forever, build
+  1.60.1)**: looteando un boss reventó `ExtractExploreXP` con `attempt to
+  index local 'msg' (a secret string value, while execution tainted by
+  'Ledger')` — el `arg1` de `CHAT_MSG_SYSTEM` llegó como *secret string*
+  (mismo mecanismo que `GetUnitSpeed`, ver "Muestreo de actividad"): se
+  puede pasar de mano en mano, pero código con taint no puede indexarlo,
+  casarlo con patrones ni formatearlo. `ui/xp_capture.lua:
+  IsReadableMessage(msg)` (única pieza que lo sabe; `core/` sigue puro)
+  usa `issecretvalue` si el cliente lo tiene **y** una sonda `pcall`
+  (`string.find`) que no supone que esa API exista; los handlers de
+  `CHAT_MSG_SYSTEM` y `CHAT_MSG_COMBAT_XP_GAIN` no tocan `arg1` (ni para
+  `tostring`) si no es legible, y avisan a ERROR una vez por evento y
+  sesión (`WarnSecretMessage`). Degradación: un `CHAT_MSG_SYSTEM` secret
+  se ignora (una xp de exploración que llegara así se suelta como
+  `"unknown"` por el matcher); un `CHAT_MSG_COMBAT_XP_GAIN` secret se
+  encola como `"kill"` con `rested = 0` (ese evento solo dispara por xp de
+  combate; las quests emparejan por cantidad exacta con prioridad) — es
+  una **suposición**, y el bono por descanso de esos mensajes se pierde.
+  Los extractores de `core/chat_patterns.lua` además toleran un `msg` no
+  string (sin coincidencia). `/ldg probe` lista ahora `issecretvalue`.
+  **Sin confirmar en el juego**: que la guarda evite el error en un boss
+  y qué otros mensajes llegan secret (TRACE `... msg=<secret>`).
 - **Instrumentación de diagnóstico (ver más abajo, "Sistema de log")**:
   todo el flujo anterior (eventos crudos, intentos de casado con sus
   capturas, bono por descanso detectado, estado de la cola de
@@ -1397,7 +1419,7 @@ o que casca al llamarla no impide ver el resto del informe.
   está corriendo sobre Classic Era o sobre WoW Forever.
 - **APIs concretas probadas** (`UnitXP`, `UnitXPMax`, `GetXPExhaustion`,
   `RequestTimePlayed`, `UnitOnTaxi`, `GetUnitSpeed`, `UnitAffectingCombat`,
-  `UnitIsDeadOrGhost`, orden fijo): cada una se marca `absent` si el
+  `UnitIsDeadOrGhost`, `issecretvalue`, orden fijo): cada una se marca `absent` si el
   global no es una función, o si lo es, se llama con `pcall` (con
   `"player"` como único argumento las que lo necesitan) y se marca
   `present, value = ...` con cada valor devuelto (`tostring` de cada
@@ -1410,6 +1432,10 @@ o que casca al llamarla no impide ver el resto del informe.
   arriba) — no son solo una curiosidad de cara al futuro, por eso vale
   la pena comprobarlas en cualquier cliente nuevo al que se porte el
   addon.
+  `issecretvalue` (llamada con `"player"`, debería dar `false`) es lo que
+  prefiere `IsReadableMessage` para detectar mensajes de chat secret (ver
+  "Captura de eventos"); ausente solo significa que allí se usa la sonda
+  `pcall`.
 - **Global strings `COMBATLOG_XPGAIN_*`**: cuenta y lista TODOS los
   globales de texto con ese prefijo, las dos familias a la vez (los
   patrones base de kill/explore y los de `EXHAUSTION` del bono por
