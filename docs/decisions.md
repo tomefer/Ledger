@@ -729,7 +729,8 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   intermediate model (`Ledger.BuildExportModel`, pure) decodes the raw shape
   (numeric `src`, flat arrays, `levels` by number) so neither format
   reimplements the `src` translation or totals. Activity is exported as RAW
-  counters (`ticks_*` in CSV); JSON also carries `played` (or `null`). **JSON is
+  counters (`ticks_*` in CSV); nothing from `/played` is exported (it is never
+  persisted, DB v10). **JSON is
   written by hand**: no JSON library exists in the addon sandbox and none can be
   added, so the encoder isn't generic (it never guesses whether an empty table
   is an array or object) but a handful of primitives (`JSONString`/`JSONNumber`/
@@ -764,9 +765,8 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
     not `totalXP` because the latter depends on the `includeRested` at close
     (not stored). No `xpRequired` → `skip`.
   - Time is information only, never a discrepancy: level and session activity as
-    percentages plus the last `/played` next to the samples the level had then
-    (`"/played, this level: 2472s played vs 2450 samples at that moment,
-    difference +22"`) with a note that it isn't an error.
+    percentages of the samples only (nothing about `/played`, another source: it
+    used to be shown next to the samples, removed 2026-09-21).
   - xp pending pairing (up to ~1 s in the matcher) can look like a transient
     negative right after a kill or ding; the window says so and `Refresh` rereads.
 - **Probe** (`core/probe.lua` + `ui/probe.lua`, `/ldg probe`): with two clients
@@ -925,7 +925,8 @@ unlike the bars): built from a generic section structure in `core/rate.lua`.
   `TIME_PLAYED_MSG` arrives after `RequestTimePlayed()` on
   `PLAYER_ENTERING_WORLD` and `PLAYER_LEVEL_UP` on both clients; "This level"
   shows a dash until it arrives and then advances second by second; after a ding
-  it resets to ~0 and doesn't show the old level's time; after a `/reload` the
+  it shows a dash (never the old level's time) until the new reply lands, and
+  stays a dash while its denominator is under 60 s; after a `/reload` the
   new value doesn't accumulate on the old one; "This session" matches the clock.
 - **Windows** (`/ldg export`, `/ldg check`, `/ldg debug`; same mechanism, none
   confirmed, and `/ldg export` must still behave the same after being
